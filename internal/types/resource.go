@@ -48,6 +48,12 @@ type ListConfig struct {
 	// dialect-correct SQL; runtime-valued $N params are collected from labeled
 	// inputs on the filter form and travel in URL query params.
 	Filter *FilterConfig `yaml:"filter"`
+	// Computed declares read-only expression-derived columns appended to the list
+	// view (E7). Each expression may reference real table columns, earlier computed
+	// names in the same list and the built-in per-driver helpers.* functions. The
+	// columns are not sortable but may be referenced by list.filter.where via the
+	// generated CTE wrapper.
+	Computed []ComputedField `yaml:"computed"`
 }
 
 // CardConfig defines a card-grid view of the resource: display fields (cards
@@ -65,6 +71,9 @@ type CardConfig struct {
 	// Filter is an optional collapsible filter section above the card grid,
 	// with the same shape and runtime behavior as list.filter.
 	Filter *FilterConfig `yaml:"filter"`
+	// Computed declares read-only expression-derived fields appended to each
+	// card (E7); same shape and semantics as list.computed (see ListConfig).
+	Computed []ComputedField `yaml:"computed"`
 }
 
 // FilterConfig defines a collapsible filter section on a list or card view: a
@@ -102,6 +111,10 @@ type DetailConfig struct {
 	Query  string            `yaml:"query"`
 	Params map[string]string `yaml:"params"`
 	Fields []Field           `yaml:"fields"`
+	// Computed declares read-only expression-derived fields appended below the
+	// detail fields (E7); computed after Get{Resource} via a generated
+	// compute{Resource}Row helper. Same shape and semantics as list.computed.
+	Computed []ComputedField `yaml:"computed"`
 }
 
 // FormConfig groups the create, update and delete form actions of a resource.
@@ -143,6 +156,21 @@ type Field struct {
 	// FK-derived option SQL the columns are added to the loader SELECT; a
 	// custom options_sql must expose them itself.
 	Copies map[string]string `yaml:"copies"`
+}
+
+// ComputedField is a read-only, expression-derived column (E7) on a list,
+// detail or card view. Name is the column/field key (referenced by views,
+// scans and filter.where), Label its display text, Type one of the shared
+// FieldTypes and Expression the SQL computed at generation time — possibly
+// using the built-in per-driver helpers.* functions (helpers.date_diff,
+// helpers.year_diff, helpers.coalesce, …). The expression may reference real
+// table columns (including {fk}_label join aliases) and earlier computed names
+// in the same block. Computed columns are never sortable.
+type ComputedField struct {
+	Name       string `yaml:"name"`
+	Label      string `yaml:"label"`
+	Type       string `yaml:"type"`
+	Expression string `yaml:"expression"`
 }
 
 // ChildResource declares one master-detail section on a header resource (D14):

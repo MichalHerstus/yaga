@@ -44,6 +44,7 @@ func testConfig() *types.Config {
 				Query:      "ListUsers",
 				CountQuery: "CountUsers",
 				Columns:    []types.Column{{Name: "id", Label: "ID", Type: "integer", Sortable: true}},
+				Computed:   []types.ComputedField{{Name: "total_gross", Type: "float", Expression: "helpers.round(total * 1.21, 2)"}},
 			},
 			Detail: &types.DetailConfig{
 				Query:  "GetUser",

@@ -2,7 +2,9 @@ package editor
 
 import (
 	"fmt"
+	"strings"
 
+	luasrc "github.com/MichalHerstus/yaga/internal/generator/luasrc"
 	"github.com/MichalHerstus/yaga/internal/types"
 	"github.com/rivo/tview"
 )
@@ -56,6 +58,22 @@ func (e *Editor) actionPage(idx, aidx int) tview.Primitive {
 		e.yesno(f, "Bulk action", a.Bulk, func(v bool) { a.Bulk = v })
 		e.long(f, "Query", a.Query, func(v string) { a.Query = v })
 		e.long(f, "Script", a.Script, func(v string) { a.Script = v })
+		e.addButton(f, "Check Script", func() {
+			item := f.GetFormItemByLabel("Script")
+			if ta, ok := item.(*tview.TextArea); ok {
+				script := ta.GetText()
+				errs := luasrc.SyntaxCheck(script)
+				if len(errs) == 0 {
+					e.errorModal("Lua Check", "Syntax OK - no errors found")
+				} else {
+					var sb strings.Builder
+					for _, synErr := range errs {
+						fmt.Fprintf(&sb, "Line %d: %s\n", synErr.Line, synErr.Message)
+					}
+					e.errorModal("Syntax Errors", strings.TrimSpace(sb.String()))
+				}
+			}
+		})
 		e.str(f, "Proc", a.Proc, func(v string) { a.Proc = v })
 		e.addButton(f, "Hooks", func() {
 			if a.Hooks == nil {

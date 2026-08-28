@@ -85,6 +85,15 @@ func (g *Generator) generateMain() error {
 		sanityQuery = fmt.Sprintf("SELECT TOP 1 1 FROM %s", g.quoteIdent(authTable))
 	}
 
+	luaImport := ""
+	luaInit := ""
+	if g.hasAnyScript() {
+		luaImport = fmt.Sprintf("\n\tluascript %q", g.moduleImport("internal/panel/luascript"))
+		if !g.isSQLite() {
+			luaInit = "\n\tluascript.SetKeepQuestion(false)"
+		}
+	}
+
 	code := fmt.Sprintf(`package main
 
 import (
@@ -101,7 +110,7 @@ import (
 	"syscall"
 	"time"
 
-	%s
+	%s%s
 	"%s"
 	"%s"
 )
@@ -123,7 +132,7 @@ func main() {
 		os.Exit(0)
 	}
 
-	auth.Init()%s
+	auth.Init()%s%s
 
 	db, err := sql.Open(%q, dsn)
 	if err != nil {
@@ -205,7 +214,7 @@ func envFrom(path, key string) string {
 	}
 	return ""
 }
-`, driverImport, g.moduleImport("internal/panel"), g.moduleImport("internal/panel/auth"), dsnBlock, driverName, poolCode, sanityQuery)
+`, driverImport, luaImport, g.moduleImport("internal/panel"), g.moduleImport("internal/panel/auth"), dsnBlock, luaInit, driverName, poolCode, sanityQuery)
 
 	return os.WriteFile(filepath.Join(g.OutDir, "main.go"), []byte(code), 0644)
 }

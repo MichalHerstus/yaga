@@ -198,7 +198,9 @@ instead if your text contains literal `%`.
 `next`, `select`, `error`, `assert`, `unpack`, the length operator `#`,
 `string`, `math`, `table.insert/remove/concat`. `print(...)` writes to the
 server's stdout; for instrumented logging from a hook use `log(msg)` instead
-(titled `[lua]` in the server log).
+(titled `[lua]` in the server log). In the wedit editor, the action **Run**
+button captures `print` output and shows it in the result modal instead of the
+terminal (`log` still goes to the wedit server log).
 
 ### What is NOT available
 

@@ -141,3 +141,45 @@ func TestTableNameFor(t *testing.T) {
 		t.Error("explicit table failed")
 	}
 }
+
+// TestHasColumn verifies that real columns, case-insensitive matches and
+// FK-label virtual columns (pn_label) are all recognised, while unknown
+// columns and label columns without a matching FK are rejected.
+func TestHasColumn(t *testing.T) {
+	st := &types.SchemaTable{
+		Name: "sklad_zasoby",
+		PK:   "id",
+		Columns: []types.SchemaColumn{
+			{Name: "id", Type: "integer"},
+			{Name: "pn", Type: "string"},
+			{Name: "mnozstvi", Type: "float"},
+		},
+		ForeignKeys: []types.SchemaFK{{
+			Column:        "pn",
+			ForeignTable:  "sklad_zbozi",
+			ForeignColumn: "pn",
+			Label:         "pn",
+		}},
+	}
+	for _, tc := range []struct {
+		name string
+		want bool
+	}{
+		{"id", true},                             // real column exact
+		{"ID", true},                             // real column case-insensitive
+		{"pn", true},                             // real column = FK base
+		{"pn_label", true},                       // FK-label virtual column
+		{"nonexistent", false},                   // unknown column
+		{"pn_label", true},                       // _label with matching FK
+		{"mnozstvi", true},                       // real column
+		{"mnozstvi_label", false},                // _label without matching FK
+		{"fk_label", false},                      // _label, no FK on "fk"
+		{"name", false},                          // real column absent, no FK
+		{"name_label", false},                    // _label, no FK on "name"
+	} {
+		got := HasColumn(st, tc.name)
+		if got != tc.want {
+			t.Errorf("HasColumn(%q) = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}

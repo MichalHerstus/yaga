@@ -76,6 +76,14 @@ func TestGenerateScriptPostgres(t *testing.T) {
 	}
 	assertGeneratedGoParses(t, dir)
 
+	main, err := os.ReadFile(filepath.Join(dir, "main.go"))
+	if err != nil {
+		t.Fatalf("read main.go: %v", err)
+	}
+	if !strings.Contains(string(main), `luascript.SetKeepQuestion(false)`) {
+		t.Errorf("postgres main.go missing luascript.SetKeepQuestion(false)\n--- generated:\n%s", main)
+	}
+
 	lua, err := os.ReadFile(filepath.Join(dir, "internal/panel/luascript/luascript.go"))
 	if err != nil {
 		t.Fatalf("read luascript.go: %v", err)
@@ -83,7 +91,7 @@ func TestGenerateScriptPostgres(t *testing.T) {
 	luaStr := string(lua)
 	for _, want := range []string{
 		"func Run(ctx context.Context, db Execer, scope Scope, code string) error",
-		"const keepQuestion = false",
+		"var keepQuestion = true",
 		"func renumber(sqlText string) string",
 		"type AbortError struct{ Msg string }",
 		"func IsAbort(err error) bool",
@@ -185,7 +193,7 @@ func TestGenerateScriptSQLite(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read luascript.go: %v", err)
 	}
-	if !strings.Contains(string(lua), "const keepQuestion = true") {
+	if !strings.Contains(string(lua), "var keepQuestion = true") {
 		t.Errorf("sqlite luascript.go must keep ? placeholders\n--- generated:\n%s", lua)
 	}
 }

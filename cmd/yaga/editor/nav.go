@@ -343,11 +343,16 @@ func (e *Editor) resPath(i int) string {
 func (e *Editor) resListPath(i int) string         { return e.resPath(i) + "/List" }
 func (e *Editor) resListFilterPath(i int) string   { return e.resListPath(i) + "/Filter" }
 func (e *Editor) resColumnsPath(i int) string      { return e.resListPath(i) + "/Columns" }
+func (e *Editor) resListComputedPath(i int) string { return e.resListPath(i) + "/Computed" }
 func (e *Editor) resCardPath(i int) string         { return e.resPath(i) + "/Card" }
 func (e *Editor) resCardFilterPath(i int) string   { return e.resCardPath(i) + "/Filter" }
 func (e *Editor) resCardFieldsPath(i int) string   { return e.resCardPath(i) + "/Fields" }
+func (e *Editor) resCardComputedPath(i int) string { return e.resCardPath(i) + "/Computed" }
 func (e *Editor) resDetailPath(i int) string       { return e.resPath(i) + "/Detail" }
 func (e *Editor) resDetailFieldsPath(i int) string { return e.resDetailPath(i) + "/Fields" }
+func (e *Editor) resDetailComputedPath(i int) string {
+	return e.resDetailPath(i) + "/Computed"
+}
 func (e *Editor) resFormPath(i int) string         { return e.resPath(i) + "/Form" }
 func (e *Editor) resActionsPath(i int) string      { return e.resPath(i) + "/Actions" }
 func (e *Editor) resPoliciesPath(i int) string     { return e.resPath(i) + "/Policies" }
@@ -508,6 +513,12 @@ func (e *Editor) resolveResList(ridx int, base string, rest []string) (navTarget
 				func(v []string) { l.Export = v })
 		}}, nil
 	}
+	if matchesSeg(rest[0], "Computed") {
+		l := ensureList(&e.cfg.Resources[ridx])
+		return e.resolveResComputed(base+"/List/Computed", "List computed columns", func() *[]types.ComputedField {
+			return &l.Computed
+		}, rest[1:])
+	}
 	if matchesSeg(rest[0], "Filter") {
 		path := base + "/List/Filter"
 		if len(rest) == 1 {
@@ -545,6 +556,15 @@ func (e *Editor) resolveResCard(ridx int, base string, rest []string) (navTarget
 				func() []string { return r.Card.Searchable },
 				func(v []string) { r.Card.Searchable = v })
 		}}, nil
+	}
+	if matchesSeg(rest[0], "Computed") {
+		r := &e.cfg.Resources[ridx]
+		if r.Card == nil {
+			r.Card = &types.CardConfig{Columns: 4, Rows: 4}
+		}
+		return e.resolveResComputed(base+"/Card/Computed", "Card computed fields", func() *[]types.ComputedField {
+			return &r.Card.Computed
+		}, rest[1:])
 	}
 	if matchesSeg(rest[0], "Filter") {
 		path := base + "/Card/Filter"
@@ -586,6 +606,15 @@ func (e *Editor) resolveResDetail(ridx int, base string, rest []string) (navTarg
 				r.Detail = &types.DetailConfig{}
 			}
 			return &r.Detail.Fields
+		}, rest[1:])
+	}
+	if matchesSeg(rest[0], "Computed") {
+		r := &e.cfg.Resources[ridx]
+		if r.Detail == nil {
+			r.Detail = &types.DetailConfig{}
+		}
+		return e.resolveResComputed(base+"/Detail/Computed", "Detail computed fields", func() *[]types.ComputedField {
+			return &r.Detail.Computed
 		}, rest[1:])
 	}
 	return navTarget{}, navErr(strings.Join(rest, "/"))
@@ -723,6 +752,37 @@ func (e *Editor) resolveResFields(ridx int, fp, title string, get func() *[]type
 		}
 	}
 	return navTarget{}, navErr(strings.Join(rest, "/"))
+}
+
+// resolveResComputed resolves .../Computed[/<computed>] — the E7 computed
+// fields of a list/card/detail block.
+func (e *Editor) resolveResComputed(base, title string, get func() *[]types.ComputedField, rest []string) (navTarget, error) {
+	if len(rest) == 0 {
+		return navTarget{base, func() tview.Primitive { return e.computedListPage(base, title, get) }}, nil
+	}
+	cs := *get()
+	ci := -1
+	for i := range cs {
+		if matchesSeg(cs[i].Name, rest[0]) {
+			ci = i
+			break
+		}
+	}
+	if ci < 0 {
+		labels := make([]string, len(cs))
+		for i := range cs {
+			labels[i] = segName(cs[i].Name, i)
+		}
+		ci = findSeg(labels, rest[0])
+	}
+	if ci < 0 {
+		return navTarget{}, navErr(rest[0])
+	}
+	cPath := base + "/" + segName(cs[ci].Name, ci)
+	if len(rest) > 1 {
+		return navTarget{}, navErr(strings.Join(rest[1:], "/"))
+	}
+	return navTarget{cPath, func() tview.Primitive { return e.computedFieldPage(base, get, ci) }}, nil
 }
 
 // resolveResHooks resolves .../Hooks[/Before|After[/<hook>]].
@@ -982,7 +1042,7 @@ func (e *Editor) childrenOf(segs []string) ([]string, bool) {
 		switch foldSeg(rest[0]) {
 		case "list":
 			if len(rest) == 1 {
-				return []string{"Columns", "Export"}, true
+				return []string{"Columns", "Computed", "Export"}, true
 			}
 			if matchesSeg(rest[1], "Columns") {
 				if len(rest) == 2 {
@@ -998,9 +1058,18 @@ func (e *Editor) childrenOf(segs []string) ([]string, bool) {
 					return []string{"Options"}, true
 				}
 			}
+			if matchesSeg(rest[1], "Computed") && len(rest) == 2 {
+				var out []string
+				if r.List != nil {
+					for i, c := range r.List.Computed {
+						out = append(out, segName(c.Name, i))
+					}
+				}
+				return out, true
+			}
 		case "card":
 			if len(rest) == 1 {
-				return []string{"Fields", "Searchable"}, true
+				return []string{"Fields", "Computed", "Searchable"}, true
 			}
 			if matchesSeg(rest[1], "Fields") {
 				if len(rest) == 2 {
@@ -1010,9 +1079,12 @@ func (e *Editor) childrenOf(segs []string) ([]string, bool) {
 					return []string{"Validation", "Options", "Visible"}, true
 				}
 			}
+			if matchesSeg(rest[1], "Computed") && len(rest) == 2 {
+				return computedSegs(&r.Card.Computed), true
+			}
 		case "detail":
 			if len(rest) == 1 {
-				return []string{"Params", "Fields"}, true
+				return []string{"Params", "Fields", "Computed"}, true
 			}
 			if matchesSeg(rest[1], "Fields") {
 				if len(rest) == 2 {
@@ -1021,6 +1093,9 @@ func (e *Editor) childrenOf(segs []string) ([]string, bool) {
 				if len(rest) == 3 {
 					return []string{"Validation", "Options", "Visible"}, true
 				}
+			}
+			if matchesSeg(rest[1], "Computed") && len(rest) == 2 {
+				return computedSegs(&r.Detail.Computed), true
 			}
 		case "form":
 			if len(rest) == 1 {
@@ -1164,6 +1239,14 @@ func fieldSegs(fs *[]types.Field) []string {
 	var out []string
 	for i, f := range *fs {
 		out = append(out, segName(f.Name, i))
+	}
+	return out
+}
+
+func computedSegs(cs *[]types.ComputedField) []string {
+	var out []string
+	for i, c := range *cs {
+		out = append(out, segName(c.Name, i))
 	}
 	return out
 }

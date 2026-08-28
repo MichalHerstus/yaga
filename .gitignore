@@ -6,3 +6,6 @@ admin/
 session-*.md
 mssql.txt
 pgs.txt
+/spec/
+.DS_Store
+internal/serve/test.db

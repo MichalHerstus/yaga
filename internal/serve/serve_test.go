@@ -92,6 +92,26 @@ func get(t *testing.T, h http.Handler, method, url string, body []byte) (*httpte
 	return rec, data
 }
 
+func post(t *testing.T, h http.Handler, url string, body []byte) (*httptest.ResponseRecorder, map[string]interface{}) {
+	t.Helper()
+	var req *http.Request
+	if body != nil {
+		req = httptest.NewRequest("POST", url, bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+	} else {
+		req = httptest.NewRequest("POST", url, nil)
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	var data map[string]interface{}
+	if rec.Header().Get("Content-Type") == "application/json" && rec.Body.Len() > 0 {
+		if err := json.Unmarshal(rec.Body.Bytes(), &data); err != nil {
+			t.Fatalf("bad json (%d): %v: %s", rec.Code, err, rec.Body.String())
+		}
+	}
+	return rec, data
+}
+
 func TestConfigGet(t *testing.T) {
 	s, _ := setupServer(t, testConfig())
 	rec, data := get(t, s.Handler(), "GET", "/api/config", nil)
@@ -306,6 +326,49 @@ func TestValidateFindings(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("expected a missing-column finding, got %v", findings)
+	}
+}
+
+// TestValidateFKLabelColumns verifies that FK-label virtual columns like
+// pn_label are not flagged as missing when the schema block carries a
+// matching foreign key.
+func TestValidateFKLabelColumns(t *testing.T) {
+	cfg := testConfig()
+	cfg.Resources = []types.Resource{{
+		Name:  "SkladZasoby",
+		Table: "sklad_zasoby",
+		List: &types.ListConfig{
+			Columns: []types.Column{
+				{Name: "id", Type: "integer"},
+				{Name: "pn_label", Type: "string"},
+			},
+			PerPage: 20,
+		},
+	}}
+	cfg.Schema = &types.Schema{
+		Tables: []types.SchemaTable{{
+			Name: "sklad_zasoby",
+			PK:   "id",
+			Columns: []types.SchemaColumn{
+				{Name: "id", Type: "integer"},
+				{Name: "pn", Type: "string"},
+			},
+			ForeignKeys: []types.SchemaFK{{
+				Column:        "pn",
+				ForeignTable:  "sklad_zbozi",
+				ForeignColumn: "pn",
+				Label:         "pn",
+			}},
+		}},
+	}
+	s, _ := setupServer(t, cfg)
+	_, data := get(t, s.Handler(), "GET", "/api/validate", nil)
+	findings := data["findings"].([]interface{})
+	for _, f := range findings {
+		label := f.(map[string]interface{})["label"].(string)
+		if strings.Contains(label, "pn_label") {
+			t.Errorf("pn_label should not be flagged as missing, got: %v", label)
+		}
 	}
 }
 
@@ -603,5 +666,143 @@ func TestFixEndpointPartialRepair(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("import_csv error should remain, got %v", data["findings"])
+	}
+}
+
+// --- E6: Lua check / debug / SQL debug / sample refresh tests ---
+
+// scriptTestConfig returns a config with a scripted action for E6 testing.
+func scriptTestConfig() *types.Config {
+	cfg := testConfig()
+	cfg.Schema = &types.Schema{
+		Tables: []types.SchemaTable{{
+			Name:    "users",
+			Columns: []types.SchemaColumn{{Name: "id", Type: "integer"}, {Name: "email", Type: "string"}},
+		}},
+	}
+	cfg.Resources[0].Form = &types.FormConfig{
+		Create: &types.FormAction{
+			Fields: []types.Field{{Name: "email", Type: "string"}},
+			Hooks: &types.Hooks{
+				Before: []types.Hook{{
+					Name:   "default_role",
+					Script: `if ctx.values["role"] == nil then ctx.values["role"] = "user" end`,
+				}},
+			},
+		},
+	}
+	return cfg
+}
+
+func TestHandleLuaCheckValid(t *testing.T) {
+	s, _ := setupServer(t, scriptTestConfig())
+	body, _ := json.Marshal(map[string]string{"script": `log("hello")`})
+	rec, data := post(t, s.Handler(), "/api/lua-check", body)
+	if rec.Code != 200 {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+	}
+	errs := data["errors"].([]interface{})
+	if len(errs) != 0 {
+		t.Errorf("expected no errors, got %v", errs)
+	}
+}
+
+func TestHandleLuaCheckInvalid(t *testing.T) {
+	s, _ := setupServer(t, scriptTestConfig())
+	body, _ := json.Marshal(map[string]string{"script": `if then`})
+	rec, data := post(t, s.Handler(), "/api/lua-check", body)
+	if rec.Code != 200 {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+	}
+	errs := data["errors"].([]interface{})
+	if len(errs) == 0 {
+		t.Error("expected syntax errors, got none")
+	}
+}
+
+func TestHandleLuaRun(t *testing.T) {
+	cfg := scriptTestConfig()
+	s, _ := setupServer(t, cfg)
+	body, _ := json.Marshal(map[string]interface{}{
+		"script": `print("hello"); ctx.values["role"] = "admin"`,
+		"id":     1,
+		"table":  "users",
+		"action": "create",
+		"values": map[string]interface{}{},
+	})
+	rec, data := post(t, s.Handler(), "/api/lua-run", body)
+	if rec.Code != 200 {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+	}
+	if data["ok"] != true {
+		t.Errorf("expected ok=true, got %v", data["ok"])
+	}
+	if data["output"] != "hello\n" {
+		t.Errorf("expected output %q, got %q", "hello\n", data["output"])
+	}
+}
+
+func TestHandleLuaRunAbort(t *testing.T) {
+	s, _ := setupServer(t, scriptTestConfig())
+	body, _ := json.Marshal(map[string]interface{}{
+		"script": `abort("not allowed")`,
+		"id":     1,
+		"values": map[string]interface{}{},
+	})
+	rec, data := post(t, s.Handler(), "/api/lua-run", body)
+	if rec.Code != 200 {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+	}
+	if data["ok"] != false {
+		t.Errorf("expected ok=false for abort")
+	}
+}
+
+func TestHandleSQLRun(t *testing.T) {
+	cfg := testConfig()
+	// Add a schema for the stub.
+	cfg.Schema = &types.Schema{
+		Tables: []types.SchemaTable{{
+			Name:    "users",
+			Columns: []types.SchemaColumn{{Name: "id", Type: "integer"}, {Name: "email", Type: "string"}},
+		}},
+	}
+	s, _ := setupServer(t, cfg)
+	body, _ := json.Marshal(map[string]interface{}{
+		"kind": "hook",
+		"sql":  "INSERT INTO users (id, email) VALUES ($1, 'test@test.com')",
+		"id":   1,
+	})
+	rec, data := post(t, s.Handler(), "/api/sql-run", body)
+	if rec.Code != 200 {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+	}
+	if data["ok"] != true {
+		t.Errorf("expected ok=true, got %v", data)
+	}
+}
+
+func TestHandleSampleRefresh(t *testing.T) {
+	cfg := testConfig()
+	cfg.Schema = &types.Schema{
+		Tables: []types.SchemaTable{{
+			Name:    "users",
+			Columns: []types.SchemaColumn{{Name: "id", Type: "integer"}},
+		}},
+	}
+	s, _ := setupServer(t, cfg)
+	rec, data := post(t, s.Handler(), "/api/sample-refresh", nil)
+	if rec.Code != 200 {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+	}
+	if data["ok"] != true {
+		t.Errorf("expected ok=true, got %v", data)
+	}
+	// No live DB configured, so row_count should be 0.
+	if data["row_count"] != float64(0) {
+		t.Errorf("expected row_count=0, got %v", data["row_count"])
+	}
+	if data["tables"] != float64(1) {
+		t.Errorf("expected tables=1, got %v", data["tables"])
 	}
 }

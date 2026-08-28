@@ -70,7 +70,7 @@ func (e *Editor) runValidation() []finding {
 		}
 		for _, ref := range refs.ColumnRefs[res] {
 			ref := ref
-			if schemaBlockHasColumn(st, ref.Column) {
+			if schema.HasColumn(st, ref.Column) {
 				continue
 			}
 			out = append(out, finding{
@@ -99,16 +99,7 @@ func schemaBlockTable(cfg types.Config, name string) *types.SchemaTable {
 	return nil
 }
 
-// schemaBlockHasColumn reports whether a schema-block table carries a column
-// with the given name, trying exact and case-insensitive matches.
-func schemaBlockHasColumn(st *types.SchemaTable, name string) bool {
-	for _, c := range st.Columns {
-		if c.Name == name || strings.EqualFold(c.Name, name) {
-			return true
-		}
-	}
-	return false
-}
+
 
 var (
 	resourceIdxRe = regexp.MustCompile(`resources\[(\d+)\]`)

@@ -223,3 +223,26 @@ func Driver(cfg *types.Config) string {
 	}
 	return "postgres"
 }
+
+// HasColumn reports whether a schema-block table carries a real column with
+// the given name (exact or case-insensitive), or when name ends with
+// "_label", whether the table has a foreign key whose Column matches the
+// base part (exact or case-insensitive).  This mirrors the generator's
+// labelJoins resolution so that FK-label virtual columns like "pn_label"
+// are not flagged as missing during validation.
+func HasColumn(st *types.SchemaTable, name string) bool {
+	for _, c := range st.Columns {
+		if c.Name == name || strings.EqualFold(c.Name, name) {
+			return true
+		}
+	}
+	if strings.HasSuffix(name, "_label") {
+		base := strings.TrimSuffix(name, "_label")
+		for _, fk := range st.ForeignKeys {
+			if fk.Column == base || strings.EqualFold(fk.Column, base) {
+				return true
+			}
+		}
+	}
+	return false
+}

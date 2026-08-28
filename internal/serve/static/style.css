@@ -158,8 +158,29 @@ h3 { margin: 22px 0 10px; font-size: 15px; color: var(--accent-2); }
 }
 .field input:focus, .field select:focus, .field textarea:focus { outline: 1px solid var(--accent); }
 .field textarea { font-family: var(--mono); font-size: 12px; min-height: 220px; resize: vertical; }
+.color-field { display: flex; gap: 8px; align-items: center; }
+.color-field input[type=color] {
+  width: 46px;
+  height: 32px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.color-field input[type=text] { min-width: 0; flex: 1; }
 .checkbox-row { display: flex; align-items: center; gap: 8px; padding-top: 22px; }
 .checkbox-row label { font-size: 13px; color: var(--text); cursor: pointer; }
+.checkbox-group {
+  display: flex;
+  align-items: center;
+  gap: 26px;
+  padding: 14px 0 2px;
+  margin-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.checkbox-group .checkbox-row { padding-top: 0; }
 input[type=checkbox] { accent-color: var(--accent); width: 15px; height: 15px; cursor: pointer; }
 
 .btn {
@@ -221,6 +242,26 @@ table.rows .row-actions { white-space: nowrap; width: 1%; text-align: right; }
   font-size: 12.5px;
   line-height: 1.5;
   resize: vertical;
+}
+
+.raw-search { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.raw-search input[type=search] {
+  flex: 0 1 360px;
+  min-width: 0;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 7px 9px;
+  font-size: 13px;
+  font-family: var(--font);
+}
+.raw-search input[type=search]:focus { outline: 1px solid var(--accent); }
+.raw-search .match-count {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text-dim);
+  min-width: 70px;
 }
 
 .placeholder { color: var(--text-faint); padding: 40px; text-align: center; }
@@ -352,3 +393,51 @@ table.rows .row-actions { white-space: nowrap; width: 1%; text-align: right; }
   background: #fff;
 }
 .preview-error { color: var(--red); font-size: 13px; margin-bottom: 8px; white-space: pre-wrap; }
+
+/* E6 debug modal */
+.debug-errors {
+  background: color-mix(in srgb, var(--red) 12%, transparent);
+  border: 1px solid var(--red);
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-family: var(--mono);
+  font-size: 13px;
+  white-space: pre-wrap;
+  margin-bottom: 12px;
+}
+.debug-result {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+}
+.debug-result strong {
+  display: block;
+  font-family: var(--mono);
+  font-size: 13px;
+  margin-bottom: 6px;
+  color: var(--text-dim);
+}
+.debug-result table { margin-top: 6px; }
+
+/* action row layout */
+.action-cell { padding: 8px 0; vertical-align: top; }
+.action-fields {
+  display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap;
+}
+.action-field { display: flex; flex-direction: column; gap: 2px; }
+.action-field input[type="checkbox"] { margin-top: 14px; }
+.action-field-label { font-size: 11px; color: var(--text-dim); margin-top: 2px; }
+.action-script-row {
+  margin-top: 8px;
+  display: flex; flex-direction: column; gap: 4px;
+}
+.action-script-row textarea,
+.action-script-row .lua-field textarea { width: 100% !important; min-height: 120px !important; }
+.action-script-row .lua-field { width: 100%; min-height: 120px !important; }
+.action-buttons {
+  position: relative; z-index: 1;
+  display: flex; gap: 6px; align-items: center; margin-top: 8px; flex-wrap: wrap;
+}
+.sub-heading { font-size: 14px; margin: 14px 0 6px; color: var(--text-dim); font-weight: 600; }
+.type-toggle { display: flex; gap: 4px; }

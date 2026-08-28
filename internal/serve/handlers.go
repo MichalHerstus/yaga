@@ -1,6 +1,8 @@
 package serve
 
 import (
+	"context"
+	"database/sql"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -8,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/MichalHerstus/yaga/internal/fixer"
+	luasrc "github.com/MichalHerstus/yaga/internal/generator/luasrc"
 	"github.com/MichalHerstus/yaga/internal/parser"
 	"github.com/MichalHerstus/yaga/internal/schema"
 	"github.com/MichalHerstus/yaga/internal/types"
@@ -230,7 +233,7 @@ func (s *Server) findingsOf(cfg *types.Config) []findingJSON {
 			continue
 		}
 		for _, c := range refs.ColumnRefs[r.Name] {
-			if !schemaBlockHasColumn(st, c.Column) {
+			if !schema.HasColumn(st, c.Column) {
 				findings = append(findings, findingJSON{"warning", "missing column: " + r.Name + "." + c.Section + "." + c.Column, ""})
 			}
 		}
@@ -261,16 +264,7 @@ func schemaBlockTable(cfg types.Config, name string) *types.SchemaTable {
 	return nil
 }
 
-// schemaBlockHasColumn reports whether a schema-block table carries a column
-// with the given name, trying exact and case-insensitive matches.
-func schemaBlockHasColumn(st *types.SchemaTable, name string) bool {
-	for _, c := range st.Columns {
-		if c.Name == name || strings.EqualFold(c.Name, name) {
-			return true
-		}
-	}
-	return false
-}
+
 
 // handleRawGet returns the in-memory config serialized to YAML for the raw
 // editing tab.
@@ -307,4 +301,190 @@ func (s *Server) handleRawPut(w http.ResponseWriter, r *http.Request) {
 		warns = []string{}
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{"ok": true, "warnings": warns, "rev": rev})
+}
+
+// --- E6: Lua check / debug / SQL debug / sample refresh ---
+
+// ensureStub returns the cached in-memory sqlite stub, building it from the
+// schema block if it does not yet exist.
+func (s *Server) ensureStub() (*sql.DB, error) {
+	if s.stubDB != nil {
+		return s.stubDB, nil
+	}
+	s.mu.RLock()
+	cfg := s.cfg
+	s.mu.RUnlock()
+	db, err := BuildStubDB(cfg)
+	if err != nil {
+		return nil, err
+	}
+	s.stubDB = db
+	return db, nil
+}
+
+// handleLuaCheck checks a Lua script for syntax errors.
+func (s *Server) handleLuaCheck(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Script string `json:"script"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	errs := luasrc.SyntaxCheck(req.Script)
+	if errs == nil {
+		errs = []luasrc.SyntaxError{}
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"errors": errs, "ok": len(errs) == 0})
+}
+
+// handleLuaRun runs a Lua script against the seeded in-memory stub.
+func (s *Server) handleLuaRun(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Script string                 `json:"script"`
+		ID     int64                  `json:"id"`
+		Table  string                 `json:"table"`
+		Action string                 `json:"action"`
+		Values map[string]interface{} `json:"values"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	stub, err := s.ensureStub()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]interface{}{
+			"ok": false, "error": err.Error(),
+		})
+		return
+	}
+	rec := NewRecordingExecer(stub)
+	scope := luasrc.Scope{
+		ID:     req.ID,
+		Table:  req.Table,
+		Action: req.Action,
+		Values: req.Values,
+	}
+	var out strings.Builder
+	runErr := luasrc.RunWithOutput(context.Background(), rec, scope, req.Script, &out)
+	result := map[string]interface{}{
+		"ok":       runErr == nil,
+		"output":   out.String(),
+		"captured": rec.Calls,
+		"values":   scope.Values,
+	}
+	if runErr != nil {
+		if abort, ok := runErr.(*luasrc.AbortError); ok {
+			result["error"] = map[string]interface{}{"line": 0, "message": abort.Msg}
+		} else {
+			result["error"] = map[string]interface{}{"line": 0, "message": runErr.Error()}
+		}
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+// handleSQLRun executes a SQL body against the seeded in-memory stub.
+func (s *Server) handleSQLRun(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Kind     string `json:"kind"` // "hook" | "action" | "procedure"
+		SQL      string `json:"sql"`
+		ID       int64  `json:"id"`
+		Table    string `json:"table"`
+		Action   string `json:"action"`
+		ProcName string `json:"proc_name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	stub, err := s.ensureStub()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]interface{}{
+			"ok": false, "error": err.Error(),
+		})
+		return
+	}
+
+	ctx := context.Background()
+	switch req.Kind {
+	case "procedure":
+		// Resolve body from config procedures block.
+		s.mu.RLock()
+		cfg := s.cfg
+		s.mu.RUnlock()
+		body := req.SQL
+		if req.ProcName != "" {
+			for _, p := range cfg.Procedures {
+				if p.Name == req.ProcName {
+					body = p.SQL
+					break
+				}
+			}
+		}
+		results := RunSQLBatch(ctx, stub, body, req.ID)
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"ok": true, "steps": results, "driver": "sqlite",
+		})
+	default: // "hook" or "action"
+		result := RunSQL(ctx, stub, req.SQL, req.ID)
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"ok": result.Error == "", "steps": []RunSQLResult{result}, "driver": "sqlite",
+		})
+	}
+}
+
+// handleSampleRefresh seeds the in-memory stub with up to 100 rows per schema
+// table from the first configured live database connection.
+func (s *Server) handleSampleRefresh(w http.ResponseWriter, r *http.Request) {
+	s.mu.RLock()
+	cfg := s.cfg
+	s.mu.RUnlock()
+
+	dsn := ""
+	driver := ""
+	for _, conn := range cfg.Connections {
+		dsn = conn.DSN
+		driver = conn.Driver
+		if dsn == "" {
+			dsn = os.Getenv("DATABASE_URL")
+		}
+		break
+	}
+	if driver == "" {
+		driver = "pgx"
+	}
+
+	// Close existing stub if any.
+	if s.stubDB != nil {
+		s.stubDB.Close()
+		s.stubDB = nil
+	}
+
+	stub, err := BuildStubDB(cfg)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]interface{}{
+			"ok": false, "error": err.Error(),
+		})
+		return
+	}
+
+	rowCount := 0
+	if dsn != "" {
+		if err := SeedFromDB(dsn, driver, cfg, stub); err == nil {
+			// Count rows per table for the response.
+			if cfg.Schema != nil {
+				for _, t := range cfg.Schema.Tables {
+					var n int
+					stub.QueryRow("SELECT COUNT(*) FROM " + quoteIdentStub(t.Name)).Scan(&n)
+					rowCount += n
+				}
+			}
+		}
+	}
+	s.stubDB = stub
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"ok":       true,
+		"row_count": rowCount,
+		"tables":   len(cfg.Schema.Tables),
+	})
 }

@@ -9,6 +9,7 @@ package serve
 
 import (
 	"context"
+	"database/sql"
 	"embed"
 	"errors"
 	"fmt"
@@ -47,8 +48,9 @@ type Server struct {
 	port int
 	open bool // open the browser automatically after binding
 
-	mcp mcpHandler
-	mux *http.ServeMux
+	mcp    mcpHandler
+	mux    *http.ServeMux
+	stubDB *sql.DB // in-memory sqlite stub for E6 debug dry-runs
 }
 
 // Options configures a wedit server.
@@ -176,6 +178,10 @@ func (s *Server) routes() {
 	mux.HandleFunc("PUT /api/raw", s.handleRawPut)
 	mux.HandleFunc("GET /api/rev", s.handleRev)
 	mux.HandleFunc("GET /api/events", s.handleEvents)
+	mux.HandleFunc("POST /api/lua-check", s.handleLuaCheck)
+	mux.HandleFunc("POST /api/lua-run", s.handleLuaRun)
+	mux.HandleFunc("POST /api/sql-run", s.handleSQLRun)
+	mux.HandleFunc("POST /api/sample-refresh", s.handleSampleRefresh)
 
 	sub, err := fs.Sub(staticFS, "static")
 	if err != nil {
@@ -185,7 +191,10 @@ func (s *Server) routes() {
 	mux.HandleFunc("GET /preview/styles.css", s.handlePreviewStyles)
 	mux.HandleFunc("GET /preview/chart.js", s.handlePreviewChart)
 
-	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServer(http.FS(sub))))
+	mux.Handle("GET /static/", http.StripPrefix("/static/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+		http.FileServer(http.FS(sub)).ServeHTTP(w, r)
+	})))
 	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
 			http.NotFound(w, r)
@@ -227,11 +236,22 @@ func (s *Server) Start() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	// A second Ctrl+C forces an immediate exit.
+	force := make(chan os.Signal, 1)
+	signal.Notify(force, os.Interrupt)
+	go func() {
+		<-ctx.Done()
+		<-force // wait for second SIGINT
+		fmt.Println("\nWEdit: forced shutdown.")
+		os.Exit(1)
+	}()
+
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.Serve(l) }()
 
 	select {
 	case <-ctx.Done():
+		fmt.Println("\nWEdit: shutting down gracefully…")
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		return srv.Shutdown(shutdownCtx)

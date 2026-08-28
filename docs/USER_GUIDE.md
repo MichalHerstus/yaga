@@ -436,6 +436,37 @@ View-only, served at `/cards`, reachable via a “Cards” button on the list.
 
 Rendered as a read-only record page; keyed by the resource’s row key.
 
+#### `computed:` — virtual columns (list / card / detail)
+
+Any of the three views may add readonly columns that are derived by an SQL
+expression **at query time**, instead of selecting existing table columns:
+
+```yaml
+    list:
+      computed:
+        - { name: total_gross, label: "Total gross", type: float,    expression: "helpers.round(total * 1.21, 2)" }
+        - { name: age_days,    label: "Age (days)",  type: integer,  expression: "helpers.date_diff(helpers.now(), created_at)" }
+      filter:
+        where: "total_gross > $1"        # computed columns work in filter.where
+```
+
+- `name` is the column key (unique within its block, must not collide with a real
+  column), `type` one of the shared field types, `expression` the SQL fragment.
+- The expression may reference **real table columns** (including `{fk}_label`
+  join aliases) and **earlier computed names in the same block**. It is passed
+  verbatim to the configured driver — use that driver's SQL syntax, not yaga's.
+- `helpers.*` tokens are expanded at generation time into driver-correct SQL:
+  `helpers.date_diff(a,b)` / `helpers.year_diff` / `helpers.month_diff`,
+  `helpers.coalesce`, `helpers.ifnull` (IFNULL/ISNULL/COALESCE per driver),
+  `helpers.round(x,n)` (numeric cast on postgres), `helpers.now()`. Calls may
+  nest (`helpers.date_diff(helpers.now(), created_at)`); unknown helpers or
+  wrong arities are emitted verbatim.
+- Computed columns render and scan like view columns, but are never sortable or
+  searchable and never appear on forms. A filter that references a computed name
+  is supported (the query is generated from a derived-table wrapper).
+- Computed fields are **read-only outputs** — there is no persistence, no write
+  path, and they do not affect `init` introspection.
+
 #### `form` — create / update / delete
 
 ```yaml

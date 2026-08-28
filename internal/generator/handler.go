@@ -345,13 +345,21 @@ func relationFormField(r types.Resource, name string) *types.Field {
 // Returns: the SELECT list, the FROM fragment (alias + JOINs), the column
 // prefix, the table reference, and whether any JOINs were emitted.
 func (g *Generator) listSelectFrom(r types.Resource, tName string, colNames []string) (selectFrag, fromFrag, colPrefix, tableRef string, hasJoins bool) {
+	selectFrag, fromFrag, colPrefix, tableRef, hasJoins = g.listSelectFromParts(r, tName, colNames)
+	return embedSQL(selectFrag), embedSQL(fromFrag), colPrefix, tableRef, hasJoins
+}
+
+// listSelectFromParts is listSelectFrom returning raw (un-embedSQL'd)
+// fragments. The E7 derived-table wrapper needs the raw text to nest one
+// SELECT inside another before a single embedSQL pass.
+func (g *Generator) listSelectFromParts(r types.Resource, tName string, colNames []string) (selectFrag, fromFrag, colPrefix, tableRef string, hasJoins bool) {
 	joins := g.labelJoins(r, colNames)
 	if len(joins) == 0 {
 		qn := make([]string, len(colNames))
 		for i, c := range colNames {
 			qn[i] = g.quoteIdent(c)
 		}
-		return embedSQL(strings.Join(qn, ", ")), embedSQL(g.quoteIdent(tName)), "", tName, false
+		return strings.Join(qn, ", "), g.quoteIdent(tName), "", tName, false
 	}
 	labelCols := map[string]bool{}
 	for _, j := range joins {
@@ -371,7 +379,102 @@ func (g *Generator) listSelectFrom(r types.Resource, tName string, colNames []st
 	for _, j := range joins {
 		fromParts = append(fromParts, j.fromPart)
 	}
-	return embedSQL(strings.Join(sel, ", ")), embedSQL(strings.Join(fromParts, " ")), "t.", tName + " t", true
+	return strings.Join(sel, ", "), strings.Join(fromParts, " "), "t.", tName + " t", true
+}
+
+// computedSelectItems renders the raw ", <expr> AS "name"" SELECT items for a
+// block of computed fields (E7). Helpers.* tokens are expanded to
+// driver-correct SQL here. The returned text is NOT embedSQL'd; callers embed
+// it according to how they splice it into emitted Go literals.
+// Params: computed (the resource view's computed fields).
+// Returns: a comma-separated list of "<expandhelpers(expr)> AS "<ident>"" items.
+func (g *Generator) computedSelectItems(computed []types.ComputedField) string {
+	var items []string
+	for _, c := range computed {
+		items = append(items, g.expandHelpers(c.Expression)+" AS "+g.quoteIdent(c.Name))
+	}
+	return strings.Join(items, ", ")
+}
+
+// computedDefsStr renders the Go ColumnDef literals for a section's computed
+// fields, prefixed with the separator that the caller's composite literal
+// needs between the last real def and the first computed def. It appends no
+// trailing separator (the call site's literal adds the final comma) and
+// returns "" when there are no computed fields, so feature-off output stays
+// byte-identical.
+func computedDefsStr(computed []types.ComputedField) string {
+	if len(computed) == 0 {
+		return ""
+	}
+	var defs []string
+	for _, c := range computed {
+		label := c.Label
+		if label == "" {
+			label = c.Name
+		}
+		t := c.Type
+		if t == "" {
+			t = "string"
+		}
+		defs = append(defs, fmt.Sprintf("{Name: %q, Label: %q, FieldType: %q}", c.Name, label, t))
+	}
+	return ", " + strings.Join(defs, ", ")
+}
+
+// computedColumns converts computed fields into synthetic list columns carrying
+// just name/label/type, so the list templ can render headers and cells for a
+// virtual column exactly like a real one. Sortable/searchable stay false.
+func computedColumns(computed []types.ComputedField) []types.Column {
+	var cols []types.Column
+	for _, c := range computed {
+		label := c.Label
+		if label == "" {
+			label = c.Name
+		}
+		t := c.Type
+		if t == "" {
+			t = "string"
+		}
+		cols = append(cols, types.Column{Name: c.Name, Label: label, Type: t})
+	}
+	return cols
+}
+
+// computedFields converts computed fields into synthetic form fields for the
+// read-only card and detail views (E7). Only name/label/type are meaningful;
+// computed fields never post back through a form.
+func computedFields(computed []types.ComputedField) []types.Field {
+	var flds []types.Field
+	for _, c := range computed {
+		label := c.Label
+		if label == "" {
+			label = c.Name
+		}
+		t := c.Type
+		if t == "" {
+			t = "string"
+		}
+		flds = append(flds, types.Field{Name: c.Name, Label: label, Type: t})
+	}
+	return flds
+}
+
+// filterReferencesComputed reports whether a compiled filter's WHERE fragment
+// references any computed field (E7). Such a filter can only run against the
+// derived-table wrapper (the plain query has no such column), so the list/card
+// handlers switch the SELECT to "(SELECT ... ) _base" when it returns true.
+// Params: compiled (the compiled filter), computed (the view's computed fields).
+// Returns: true when at least one computed name appears in the compiled WHERE.
+func (g *Generator) filterReferencesComputed(compiled *filterexpr.Compiled, computed []types.ComputedField) bool {
+	if compiled == nil {
+		return false
+	}
+	for _, c := range computed {
+		if strings.Contains(compiled.Frag, filterexpr.QuoteIdent(g.driver(), c.Name)) {
+			return true
+		}
+	}
+	return false
 }
 
 // filterCompile parses and compiles a list/card filter's `where` expression
@@ -668,6 +771,14 @@ func (g *Generator) generateListHandler(dir string, r types.Resource) error {
 			sortableCols = append(sortableCols, c.Name)
 		}
 	}
+	scanNames := make([]string, len(colNames))
+	copy(scanNames, colNames)
+	for _, c := range r.List.Computed {
+		scanNames = append(scanNames, c.Name)
+	}
+
+	computedItems := g.computedSelectItems(r.List.Computed)
+	hasComputed := len(r.List.Computed) > 0
 
 	selectFrag, fromFrag, colPrefix, _, _ := g.listSelectFrom(r, tName, colNames)
 
@@ -681,7 +792,6 @@ func (g *Generator) generateListHandler(dir string, r types.Resource) error {
 	// Compile the optional filter once so the runtime block, viewmodel and
 	// imports can all be derived from it.
 	var compiled *filterexpr.Compiled
-	var filterRT string
 	hasFilter := r.List.Filter != nil
 	if hasFilter {
 		var cerr error
@@ -689,6 +799,36 @@ func (g *Generator) generateListHandler(dir string, r types.Resource) error {
 		if cerr != nil {
 			return cerr
 		}
+	}
+	// E7: when the filter references a computed column the plain query has no
+	// such column, so the SELECT is wrapped in a derived table exposing the
+	// computed columns to the outer WHERE. The outer query has no join aliases,
+	// so the filter is recompiled unprefixed.
+	useDerived := hasComputed && hasFilter && g.filterReferencesComputed(compiled, r.List.Computed)
+	if useDerived {
+		innerSelect, innerFrom, _, _, _ := g.listSelectFromParts(r, tName, colNames)
+		derived := "(SELECT " + innerSelect
+		if hasComputed {
+			derived += ", " + computedItems
+		}
+		derived += " FROM " + innerFrom + ") _base"
+		var outerCols []string
+		for _, n := range scanNames {
+			outerCols = append(outerCols, g.quoteIdent(n))
+		}
+		selectFrag = embedSQL(strings.Join(outerCols, ", "))
+		fromFrag = embedSQL(derived)
+		colPrefix = ""
+		var cerr error
+		compiled, cerr = g.filterCompile(r.List.Filter, "")
+		if cerr != nil {
+			return cerr
+		}
+	} else if hasComputed {
+		selectFrag += ", " + embedSQL(computedItems)
+	}
+	var filterRT string
+	if hasFilter {
 		filterRT = g.filterRuntimeBlock(r.List.Filter, compiled)
 	}
 	urlImport := ""
@@ -898,7 +1038,7 @@ func List(db *sql.DB) http.HandlerFunc {
 
 	sb.WriteString(`        var items []map[string]interface{}
         for rows.Next() {
-            ` + scanFields(colNames, true) + `
+            ` + scanFields(scanNames, true) + `
             items = append(items, item)
         }
         if !totalSet {
@@ -929,7 +1069,7 @@ func List(db *sql.DB) http.HandlerFunc {
             Sort:       sort,
             Order:      order,
             Columns: []viewmodels.ColumnDef{
-                ` + colDefsStr(r.List.Columns) + `,
+                ` + colDefsStr(r.List.Columns) + computedDefsStr(r.List.Computed) + `,
             },
             Resource:  ` + fmt.Sprintf("%q", r.Name) + `,
             PanelPath: ` + fmt.Sprintf("%q", g.Config.Panel.Path) + `,
@@ -1031,20 +1171,54 @@ func (g *Generator) generateCardHandler(dir string, r types.Resource) error {
 	for _, s := range card.Searchable {
 		searchCols = append(searchCols, s)
 	}
+	scanNames := make([]string, len(fieldNames))
+	copy(scanNames, fieldNames)
+	for _, c := range card.Computed {
+		scanNames = append(scanNames, c.Name)
+	}
+	computedItems := g.computedSelectItems(card.Computed)
+	hasComputed := len(card.Computed) > 0
 	selectFrag, fromFrag, colPrefix, _, _ := g.listSelectFrom(r, tName, fieldNames)
-	searchable := g.quoteSQLList(searchCols, colPrefix)
 
 	hasFilter := card.Filter != nil
 	var compiled *filterexpr.Compiled
-	var filterRT string
 	if hasFilter {
 		var cerr error
 		compiled, cerr = g.filterCompile(card.Filter, colPrefix)
 		if cerr != nil {
 			return cerr
 		}
+	}
+	// E7: same derived-table switch as the list handler when the filter
+	// references a computed card field.
+	useDerived := hasComputed && hasFilter && g.filterReferencesComputed(compiled, card.Computed)
+	if useDerived {
+		innerSelect, innerFrom, _, _, _ := g.listSelectFromParts(r, tName, fieldNames)
+		derived := "(SELECT " + innerSelect
+		if hasComputed {
+			derived += ", " + computedItems
+		}
+		derived += " FROM " + innerFrom + ") _base"
+		var outerCols []string
+		for _, n := range scanNames {
+			outerCols = append(outerCols, g.quoteIdent(n))
+		}
+		selectFrag = embedSQL(strings.Join(outerCols, ", "))
+		fromFrag = embedSQL(derived)
+		colPrefix = ""
+		var cerr error
+		compiled, cerr = g.filterCompile(card.Filter, "")
+		if cerr != nil {
+			return cerr
+		}
+	} else if hasComputed {
+		selectFrag += ", " + embedSQL(computedItems)
+	}
+	var filterRT string
+	if hasFilter {
 		filterRT = g.filterRuntimeBlock(card.Filter, compiled)
 	}
+	searchable := g.quoteSQLList(searchCols, colPrefix)
 	urlImport := ""
 	if hasFilter {
 		urlImport = "    \"net/url\"\n"
@@ -1232,7 +1406,7 @@ func (g *Generator) generateCardHandler(dir string, r types.Resource) error {
 	}
 
 	itemsAssignment := `        for rows.Next() {
-            ` + scanFields(fieldNames, true) + `
+            ` + scanFields(scanNames, true) + `
             items = append(items, item)
         }
         if !totalSet {
@@ -1322,7 +1496,7 @@ func Cards(db *sql.DB) http.HandlerFunc {
 			}
 			return ""
 		}(),
-		fieldDefsStr(card.Fields),
+		fieldDefsStr(card.Fields) + computedDefsStr(card.Computed),
 		cols, rows, kanban, card.KanbanField,
 		kanbanColumnsExpr,
 		r.Name, panelPath,
@@ -1335,6 +1509,37 @@ func Cards(db *sql.DB) http.HandlerFunc {
 		resourceTitle(r), panelPath, r.Name)
 
 	return os.WriteFile(filepath.Join(dir, "card.go"), []byte(code), 0644)
+}
+
+// computeRowCode renders the package-level compute<Resource>Row helper that a
+// detail handler calls to materialize its detail.computed fields (E7). A single
+// query selects every computed expression from the resource table by id and
+// stores the results in the item map, so the detail templ renders them exactly
+// like real fields. Returns "" when the resource declares no computed fields.
+func (g *Generator) computeRowCode(r types.Resource) string {
+	computed := r.Detail.Computed
+	if len(computed) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "func compute%sRow(db *sql.DB, ctx context.Context, item map[string]interface{}, id %s) error {\n", r.Name, g.idGoTypeForResource(r))
+	for _, c := range computed {
+		fmt.Fprintf(&sb, "    var val_%s interface{}\n", c.Name)
+	}
+	var vars []string
+	for _, c := range computed {
+		vars = append(vars, "&val_"+c.Name)
+	}
+	querySQL := "SELECT " + g.computedSelectItems(computed) +
+		" FROM " + g.quoteIdent(tableName(r)) +
+		" WHERE " + g.quoteIdent(idColumn(r)) + " = " + g.placeholder(1)
+	fmt.Fprintf(&sb, "    err := db.QueryRowContext(ctx, %s, id).Scan(%s)\n", strconv.Quote(querySQL), strings.Join(vars, ", "))
+	sb.WriteString("    if err != nil {\n        return err\n    }\n")
+	for _, c := range computed {
+		fmt.Fprintf(&sb, "    item[%q] = val_%s\n", c.Name, c.Name)
+	}
+	sb.WriteString("    return nil\n}\n")
+	return sb.String()
 }
 
 // generateDetailHandler writes detail.go for a resource: a Detail(db) handler
@@ -1355,6 +1560,18 @@ func (g *Generator) generateDetailHandler(dir string, r types.Resource) error {
 	if hasChildren {
 		fmtImport = "    \"fmt\"\n"
 	}
+	contextImport := ""
+	computeRow := g.computeRowCode(r)
+	computeCall := ""
+	if computeRow != "" {
+		contextImport = "    \"context\"\n"
+		computeCall = fmt.Sprintf(`        if err := compute%sRow(db, r.Context(), item, %s(id)); err != nil {
+            httperr.Internal(w, err)
+            return
+        }
+
+`, r.Name, g.idGoTypeForResource(r))
+	}
 
 	code := fmt.Sprintf(`package %s
 
@@ -1362,7 +1579,7 @@ import (
     "database/sql"
     "net/http"
     "strconv"
-    %s
+    %s%s
     %q
     %q
     %q
@@ -1371,7 +1588,7 @@ import (
     layoutviews %q
 )
 
-func Detail(db *sql.DB) http.HandlerFunc {
+%sfunc Detail(db *sql.DB) http.HandlerFunc {
     return func(w http.ResponseWriter, r *http.Request) {
         idStr := r.PathValue("id")
         id, err := strconv.Atoi(idStr)
@@ -1386,7 +1603,7 @@ func Detail(db *sql.DB) http.HandlerFunc {
             return
         }
 
-%s
+%s%s
         vd := &viewmodels.DetailData{
             Item: item,
             Fields: []viewmodels.ColumnDef{
@@ -1401,13 +1618,15 @@ func Detail(db *sql.DB) http.HandlerFunc {
     }
 }
 `, pkgName,
-		fmtImport,
+		fmtImport, contextImport,
 		g.moduleImport("internal/data"), g.moduleImport("internal/viewmodels"), g.moduleImport("internal/views/resources/"+pkgName),
 		g.moduleImport("internal/panel/auth"), g.moduleImport("internal/panel/httperr"), g.moduleImport("internal/views/layout"),
+		computeRow,
 		queryName,
 		g.idGoTypeForResource(r),
 		childLoad,
-		fieldDefsFromDetail(r.Detail.Fields),
+		computeCall,
+		fieldDefsFromDetail(r.Detail.Fields)+computedDefsStr(r.Detail.Computed),
 		r.Name,
 		g.Config.Panel.Path,
 		childLines,

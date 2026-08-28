@@ -1067,12 +1067,27 @@ was rewritten (2026-08-16)**: the original server-side UA detection + separate
 mobile templ views plan is superseded by an always-on REST/JSON CRUD API on the
 generated dashboard plus a generated React Native/Expo app driven by a
 spec-derived manifest (`visible_on_mobile` is retained but consumed by the app,
-not a UA-sniffing middleware).
+not a UA-sniffing middleware). Editor-side tooling (**E6**, spec 2026-08-16)
+was added: a Lua syntax checker surfaced through validation plus a wedit-only
+dry-run debugger — Lua `script:` bodies and SQL hook/action/procedure bodies —
+against a throwaway in-memory sqlite stub seeded (on explicit refresh) with up
+to 100 rows per live table.
 
 | Item | Status |
 |---|---|
 | Mobile device support (always-on REST/JSON CRUD API at `{panel}/api` with Bearer-token auth + generated React Native/Expo app, manifest-driven screens, `visible_on_mobile` nav filter) | Planned (E1), spec rewritten 2026-08-16 |
-| Lua scripting for actions & hooks (gopher-lua, `script:` body, `ctx` scope, `db.*`/`abort`/`log` host API) | Planned (E2) |
+| Lua scripting for actions & hooks (gopher-lua, `script:` body, `ctx` scope, `db.*`/`abort`/`log` host API) | Planned (E2), implemented 2026-08-14 — see `internal/generator/luascript.go` and `docs/Lua-for-Yaga-guide.md` |
+| Editor-side check + debug dry-run (Lua syntax check in `yaga validate`/Validate/MCP validate; wedit `/api/lua-run` + `/api/sql-run` against an in-memory sqlite stub seeded on explicit refresh) | Planned (E6), spec 2026-08-16 |
+| Virtual computed fields (per-list/detail/card SQL expressions, per-driver `helpers.*` functions, CTE-wrapper filter support) | Planned (E7), spec 2026-08-28 |
+
+Phase E was extended (2026-08-28) with **E7 — virtual computed fields**: read-only,
+expression-derived columns on list/detail/card views computed at generation time from a
+small set of **per-driver SQL helper functions** (`helpers.date_diff`, `helpers.year_diff`,
+`helpers.coalesce`, …). They are **not sortable** (kept out of `validSorts`), are
+**filterable** in list/card `filter.where` via a CTE wrapper, and never touch the DB
+schema — no stored columns, no migrations, no `data.go`/`Querier` changes (compute happens
+in the handler). Zero computed fields keeps the generated output byte-identical, guarded
+by a regression test.
 
 ---
 
@@ -1630,3 +1645,314 @@ structural add/remove, invalid edit returns `isError` + leaves config untouched,
 opencode flow against a temp `yaga.yaml` (initialize → tools/list → set_value →
 validate → save → assert disk + `.bak`). `go vet ./...` / `go build ./...` /
 `go test ./...` all clean; existing wedit/`--fix` suites stay green.
+
+---
+
+### E6 — Check + debug inside edit/wedit (Lua & SQL)
+
+**Status: planned (2026-08-16), not started.** Add the ability to **check** Lua
+`script:` bodies (actions + create/update/delete before/after hooks) for syntax
+errors and to **debug** them — and the SQL bodies: hook `sql:`, action `query:`,
+and sqlite `procedures:` batches — with a dry-run against a throwaway,
+**user-seeded** in-memory sqlite DB, instead of only discovering mistakes in the
+generated app at runtime. Scope decision (2026-08-16): the debug dry-run uses
+**in-memory sqlite** and is **wedit-only** (the TUI gets the Lua syntax *check*
+too, but not a Run panel; SQL gets no validation tier at all). SQL decision
+(2026-08-16, §D): SQL debugging is **wedit-only** and covers **hook `sql:` +
+action `query:` + sqlite `procedures:` batches**; the stub is **empty by
+default** and seeded **only on explicit user action** ("Refresh sample data")
+with the **first 100 rows (max) of each `schema:` table**.
+
+Two tiers + a data plane:
+
+- **Check (Tier 1, Lua only)** — catch Lua syntax errors in five places: `yaga
+  validate`, the TUI Validate screen, the wedit Validate tab, MCP `validate`, and
+  a per-field **"Check"** button next to each Script editor. There is **no SQL
+  tier 1**: a sqlite-based syntax/schema check against pg/mssql-only SQL
+  (`ILIKE`, `[x]`, `CALL`/`EXEC`, `::casts`, `OUTPUT INSERTED`) would
+  false-negative on perfectly valid configs, so SQL debugging stays a wedit
+  dry-run.
+- **Debug (Tier 2, wedit only)** — dry-run a Lua **script** or a **SQL body**
+  against the shared seeded in-memory sqlite stub, capturing the SQL it would
+  issue, result rows, `rows_affected`/`last_insert_id`, Lua `log` output, mutated
+  `ctx.values`, and abort/error.
+
+**0. Data plane — seeded in-memory sqlite stub (shared by Lua + SQL).** Fresh
+in-memory sqlite via `modernc.org/sqlite` (already a yaga dependency);
+`CREATE TABLE` from `cfg.Schema.Tables` with quoted identifiers, **no FK
+enforcement** (`PRAGMA foreign_keys` stays off, so row-copy order is irrelevant).
+The stub is **empty until asked**. `POST /api/sample-refresh` opens the first
+`connections[].dsn` (driver from `connections[].driver`; pgx / mattn /
+go-mssqldb are all already yaga deps via `init --db`) and for each `schema:`
+table SELECTs **at most 100 rows** — postgres/sqlite `SELECT "c",… FROM "t" LIMIT
+100`, mssql `SELECT TOP 100 "c",… FROM "t"` — with the column list from the
+schema block; tables missing in the live DB are skipped (not fatal). Values are
+coerced to sqlite-friendly storage: `time.Time` → RFC3339 text, `[]byte` → BLOB,
+`bool` → 0/1, numerics stay native (sqlite dynamic typing absorbs the rest). The
+seeded stub is cached in `Server`; **refresh is explicit only** — the run
+endpoints never touch the live DB. No `connections:`/`schema:` or an unreachable
+DB → the stub stays empty. **Privacy:** the sample copies real row bytes (incl.
+password-hash columns) only into an in-memory DB — never persisted, never
+transmitted; the UI displays a note. **Spike item:** verify `modernc.org/sqlite`
+binds `$N` positionally like mattn (the generated app's driver); if not, map
+numbered `$N` tokens to `?` in statement order via a token-aware pass (the
+inverse of `luascript.renumber`).
+
+**A. Shared runtime as a single importable package (foundation).** Move the Lua
+runtime out of the emitted `const luaPackageSrc` (`internal/generator/luascript.go`)
+into one real package **`internal/generator/luasrc/luascript.go`** (`package
+luascript`) containing `Scope`, `Execer`, `Run`, `SyntaxCheck`,
+`NewCtx`, `renumber`, `luaQueryArgs`, `goToLua`/`luaToGo`, `abortPrefix`.
+`keepQuestion` becomes an exported `SetKeepQuestion(bool)` var (default on). The
+generated app gets one `luascript.SetKeepQuestion(...)` line appended in generated
+`main.go` (gated); the yaga binary sets it from the config driver. The generator
+`//go:embed`s that file and writes it verbatim into the generated
+`internal/panel/luascript/luascript.go` (package name already `luascript`); emitted
+call sites keep calling `luascript.Run(...)` unchanged. `SyntaxCheck`:
+`LoadString("function run(ctx) " + code + "\nend")` → parse each `<line>: <msg>`.
+Driving both sides from one file avoids drift, guarded by the existing
+`TestGenerateScriptFeatureOff` byte-identical test. **Dependency:** add direct
+`github.com/yuin/gopher-lua v1.1.1` to the yaga `go.mod` (currently only the
+generated module).
+
+**B. Tier 1 — syntax check surfacing.**
+
+- **Parser:** new `validateScripts(cfg, add)` in `internal/parser/validator.go`
+  (wired into `ValidateAll`), walking every `Script != ""` body and emitting a
+  non-blocking `parser.Warning` `"<resource>/<hook-or-action> script: <line>: <msg>"`
+  per `SyntaxCheck` error. Flows automatically into `yaga validate`, the TUI
+  Validate screen, wedit Validate, and MCP `validate`.
+- **TUI** (`cmd/yaga/editor/hooks.go`, `actions.go`): a "Check" button under the
+  Script `long` field (existing `addButton`/shortcut infra) running
+  `luascript.SyntaxCheck` on the current value, showing line-numbered errors in a
+  modal; errors also appear on the Validate screen via the parser warning.
+- **wedit:** `POST /api/lua-check` `{script}` → `{errors:[{line,message}]}`
+  (`internal/serve/handlers.go`, route in `serve.go`); a "Check" button + error
+  list under the `luaTextArea` in `static/app.js`.
+
+**C. Tier 2 — Lua debug dry-run (wedit only).** Runs against the shared seeded
+stub (§0) through the recording `Execer`, `SetKeepQuestion(true)` so `?` binding
+matches sqlite. Documented caveat: mssql/postgres-only SQL inside the script's
+`db.*` calls is best-effort — a debug aid, not a correctness guarantee.
+`POST /api/lua-run` `{script, id, table, action, values}` →
+`{ok, captured:[{sql,args}], log:[], values:{}, error:{line,msg}?}` running
+`luascript.Run(ctx, recordingExecer, Scope{...}, script)`. UI: a per-script
+debug panel (`id`/`table`/`action` inputs, values JSON) showing captured SQL,
+log lines, mutated `ctx.values`, and abort/error.
+
+**D. Tier 2 — SQL debug dry-run (wedit only).** `POST /api/sql-run`
+`{kind: "hook"|"action"|"procedure", sql, id, table, action}` — hook/action
+carry the SQL text; `procedure` resolves its body from `cfg.Procedures` by name
+(only meaningful when the driver is sqlite). Runs against the shared seeded stub
+through the recording `Execer`.
+
+- **hook / action:** `ExecContext(sql, {id})` **verbatim** (faithful to the
+  generator — hook `sql:` and action `query:` execute as written, `$1` = scope
+  ID / row id), then a QueryContext attempt so SELECT-style statements render
+  result rows (decision: rows are surfaced). Response
+  `{ok, steps:[{sql, args, rows, rows_affected, last_insert_id, error}], driver}`
+  — hook/action = a single step.
+- **procedure (sqlite):** split the body with the `splitStatements` tokenizer
+  copy (§E), run each statement with `$1` = id only when `containsPlaceholder`,
+  all statements inside one sqlite transaction, rollback on error — mirrors
+  `procs.Exec` in the generated app; one response step per statement, in order;
+  a failing step carries `error`, later steps carry `skipped: true`.
+- **UI:** the action `query` field becomes a `type:"sql"` field in
+  `ACTION_SCHEMA` (textarea + Run button); the action `script` field already
+  renders via `luaTextArea` (gains Check + Run under B/C). **Hooks get a minimal
+  row editor** (wedit today edits hooks only through the JSON modal, so no Run
+  surface exists): name/kind (`fn`/`sql`/`proc`/`script`) + textarea + a **Run**
+  button for `sql`/`script` bodies. A shared debug modal for C + D: `id`/`table`/
+  `action` prefilled from context, `values` JSON (Lua only), the results table
+  (rows for SELECT-style, else `rows_affected`/`last_insert_id`, or `error`), and
+  the "sample data: N rows · Refresh" bar (§0) plus the driver-caveat note.
+
+**E. Stub / seed / recording wiring (shared).** `internal/serve/sqlrun.go` (new)
+holds `BuildStubDB(cfg)`, `SeedFromDB(dsn, driver, schema, stub)`, the recording
+`Execer` wrapper, `RunSQL(stub, sql, id)` + the procedure batch runner, and
+**copies** of `splitStatements`/`containsPlaceholder` (duplicated from
+`internal/generator/procs.go` by the same convention as its existing generator
+copy — parity is unit-tested so the emitted runner and the editor runner stay in
+sync). Both `POST /api/lua-run` and `POST /api/sql-run` go through it.
+
+**Decisions taken (2026-08-16):** debug is wedit-only (TUI Run panel is heavier
+to render and out of scope for v1); in-memory sqlite for the stub; the stub is
+seeded from the **live DB — first 100 rows max per `schema:` table** — and
+**only on explicit Refresh** (`POST /api/sample-refresh`), defaulting to empty.
+SQL debug covers **hook `sql:` + action `query:` + sqlite `procedures:` batches**;
+SELECT-style SQL renders **result rows** alongside `rows_affected`/
+`last_insert_id`; there is **no Tier-1 SQL check**. **Out of scope (unless
+requested):** MCP `lua_check`/`lua_run`/`sql_run` tools (MCP `validate` already
+gains the Lua warnings for free); TUI Run/Refresh panels; seeded-row CRUD or
+editing beyond the first-100 window; any real-driver execution at edit time.
+
+**Files:**
+
+| Path | Purpose |
+|------|---------|
+| `internal/generator/luasrc/luascript.go` | canonical runtime: `Run`, `Scope`, `Execer`, `SyntaxCheck`, `renumber`, conversions (shared by yaga + generated app) |
+| `internal/generator/luascript.go` | slimmed to embed + emit `luascript.go` verbatim; `main.go` gains gated `SetKeepQuestion` |
+| `internal/generator/procs.go` | unchanged (its splitter copy stays; the new parity test guards ours) |
+| `internal/parser/validator.go` | `validateScripts` → `Warning` per Lua syntax error, wired into `ValidateAll` |
+| `internal/serve/sqlrun.go` + `_test.go` | stub builder, `SeedFromDB`, recording `Execer`, single/batch SQL runner, splitter/placeholder copies |
+| `internal/serve/handlers.go` | `POST /api/lua-check`, `POST /api/lua-run`, `POST /api/sql-run`, `POST /api/sample-refresh` |
+| `internal/serve/serve.go` | register those four routes |
+| `internal/serve/static/app.js` | hook row editor, `type:"sql"` action field, Check/Run buttons, shared debug modal, sample-data bar |
+| `cmd/yaga/editor/hooks.go`, `actions.go` | "Check" button + line-numbered error modal on the Script field |
+| `go.mod` | `+github.com/yuin/gopher-lua v1.1.1` |
+
+**Tests / exit criteria:** `internal/generator/luasrc/*_test.go` — `SyntaxCheck`
+line numbers, `Run` happy/abort/error, `TestGenerateScriptFeatureOff` stays
+byte-identical; `internal/parser` — a config with a malformed script yields a
+`Warning` with the path; `internal/serve/serve_test.go` — httptest of
+`/api/lua-check` and `/api/lua-run` (captured SQL, log, `ctx.values` mutation,
+abort, error) and `/api/sql-run` (hook/action single step, procedure batch +
+rollback on a failing statement, SELECT-style rows vs `rows_affected`, `$N`
+binding) and `/api/sample-refresh` (at-most-100 per table, missing tables
+skipped, unreachable DB → empty-stub fallback, seed cached until the next
+Refresh). `go vet ./...` / `go build ./...` / `go test ./...` all clean;
+existing wedit/`--fix`/editor suites stay green.
+
+---
+
+### E7 — Virtual computed fields (per-view SQL expressions with per-driver helpers)
+
+**Status: planned (2026-08-28), not started.** Add **read-only, expression-derived
+columns** to the list/detail/card views of a resource — e.g. "Warranty days left"
+(`helpers.date_diff(warranty_expiry, CURRENT_DATE)`), "Full name", "Order total".
+Computations happen **at generation time** via a small set of built-in **per-driver SQL
+helper functions**; nothing is stored in the DB, no migrations, no schema-block changes,
+and the existing `data.go`/`Querier` surface is untouched (compute runs in the handler).
+
+**Design decisions (confirmed 2026-08-28):**
+1. **Helpers** — a curated set of built-in per-driver SQL functions expanded at
+   generation time from `helpers.<name>(…)` tokens (regex `helpers\.(\w+)\(([^)]+)\)`,
+   args split on commas respecting nested parentheses, nested helpers supported via an
+   expand-to-fixpoint loop). The docs call out that **driver differences exist**
+   (`date_diff` is `julianday`-based on sqlite, `DATEDIFF` on mssql, `EXTRACT` on
+   postgres). Custom expressions use rest-of-SQL verbatim (any dialect feature), so no
+   per-driver expression language is needed.
+2. **Not sortable** — computed fields never appear in `validSorts` (the runtime `sort`
+   column whitelist); their headers render without the sort link. Keeps the ORDER BY
+   column list static and the existing whitelist complete.
+3. **Filterable** — `list.filter`/`card.filter` `where` expressions **may reference
+   computed names**. Because the compiled filter WHERE fragment is emitted as part of the
+   data query, references to computed columns (which exist only as SELECT aliases) are
+   made visible by wrapping the data query in a **CTE**: `WITH _base AS (SELECT …, <expr>
+   AS warranty_days_left …) SELECT …, COUNT(*) OVER() AS _total FROM _base WHERE
+   <filter> AND <search>`. The filter's `$N` params and the windowed count work unchanged
+   (the `_base` CTE has no ORDER BY/LIMIT, so sqlite/mssql restrictions don't apply).
+
+**YAML shape** — one new optional `computed:` list per `list:`/`detail:`/`card:` block:
+```yaml
+list:
+  columns:
+    - name: name
+      label: Name
+  computed:
+    - name: warranty_days_left
+      label: Warranty Days
+      type: integer
+      expression: "helpers.date_diff(warranty_expiry, CURRENT_DATE)"
+    - name: full_name
+      label: Full Name
+      type: string
+      expression: "helpers.coalesce(first_name, '') || ' ' || helpers.coalesce(last_name, '')"
+```
+The `expression` may reference: real table columns (FK label columns via the
+pre-existing `{fk}_label` join aliases), other computed fields defined earlier in the same
+list (SQL alias scoping — compute in declaration order, no forward refs), and the helper
+functions. Field `type` comes from the existing `FieldType` set (`string`, `integer`,
+`float`, `boolean`, `datetime`, `date`, `badge`, `email`) so list/card cells reuse the
+existing `renderCell` renderers unchanged.
+
+**Helper table (generation-time expansion, per driver from `connections[*].driver`):**
+
+| Helper | Postgres | SQLite | MSSQL |
+|---|---|---|---|
+| `date_diff(a, b)` | `EXTRACT(DAY FROM ({a})::timestamp - ({b})::timestamp)` | `julianday({a}) - julianday({b})` | `DATEDIFF(DAY, {b}, {a})` |
+| `year_diff(a, b)` | `EXTRACT(YEAR FROM age(({a})::timestamp, ({b})::timestamp))` | `CAST((julianday({a}) - julianday({b})) / 365.25 AS INTEGER)` | `DATEDIFF(YEAR, {b}, {a})` |
+| `month_diff(a, b)` | `(EXTRACT(YEAR FROM age(({a})::timestamp, ({b})::timestamp)) * 12 + EXTRACT(MONTH FROM age(({a})::timestamp, ({b})::timestamp)))` | `CAST((julianday({a}) - julianday({b})) / 30.44 AS INTEGER)` | `DATEDIFF(MONTH, {b}, {a})` |
+| `coalesce(a, b)` | `COALESCE({a}, {b})` | `COALESCE({a}, {b})` | `COALESCE({a}, {b})` |
+| `round(a, n)` | `ROUND({a}::numeric, {n})` | `ROUND({a}, {n})` | `ROUND({a}, {n})` |
+| `now()` | `NOW()` | `datetime('now')` | `GETDATE()` |
+| `ifnull(a, b)` | `COALESCE({a}, {b})` | `IFNULL({a}, {b})` | `ISNULL({a}, {b})` |
+
+**List/card generation (`handler.go`):** when a resource has `computed:` on `list`/`card`,
+1. `listSelectFrom()` additionally emits `, <expanded expr> AS <quoted name>` per computed
+   field (in declaration order, after the real columns).
+2. The computed names are appended to the scan/`colNames` slice **after** the real
+   columns, so `scanFields(colNames, true)` picks them up into the row map unchanged.
+3. When a computed field exists AND a filter is present, the data query is wrapped in the
+   `WITH _base AS (…) SELECT col1, …, COUNT(*) OVER() AS _total FROM _base` CTE (the
+   filter/search/order fragments move to the outer query; `_base` stays bare `SELECT`,
+   no ORDER BY/LIMIT). When no filter references a computed name, the plain query shape is
+   kept (only the `, <expr> AS col` addition) — the CTE is strictly a visibility device for
+   the filter, never a semantic requirement.
+4. Computed names are **never** added to `validSorts`; the sort header is plain text.
+
+**Detail generation (`handler.go`, `detail.go`):** after `data.Get<Resource>(db, id)`,
+when `detail.computed:` has entries the handler calls a generated
+`compute<Resource>Row(db, item map[string]interface{})` helper — one `db.QueryRowContext`
+`SELECT <expr>, <expr> …` whose `Scan` target names are the computed fields — then loops
+`Scan(&item["<name>"], …)` into the same `item` map used by the view (falls back to the
+computed field's zero value via `Stringify`-safe `sql.Null*`/nil scan buffers on error).
+`data.go` and the `Querier` interface are unchanged.
+
+**Templ generation (`templ.go`):** list headers/cells, card fields and detail rows render
+from the same `data.Fields`/`data.Columns` `[]viewmodels.ColumnDef` slices as today — the
+handler appends a `ColumnDef` per computed field (`{Name, Label, Type, Computed: true}`).
+`renderCell` already handles every allowed computed `type`, so only the **header** changes:
+computed columns render a non-sortable `<th>` (no `<a href="?sort=…">`). Detail view appends
+computed fields to `DetailData.Fields` in the same way.
+
+**Validation (`internal/parser/validator.go`)** — `validateComputed(cfg, add)`: for each
+`computed:` block — empty `name`, duplicate name, unknown `type` (not in `FieldTypes`),
+empty `expression` are errors; a `list`/`card` computed name referenced by a
+`filter.where` via adapters/`filterColumns` that doesn't exist is a `parser.Warning`
+(compile-time WHERE failures are the job of the DB). Computed expressions are not parsed
+further (no SQL grammar in the validator) — a fresh-token check that every `<ident>` in
+the expression is either a real column (or `{fk}_label`/computed-alias in scope) is a
+`Warning`, not an error (drivers differ and custom SQL is free-form).
+
+**Editor integration:** TUI — `computed:` rows editable under
+`Resources/<res>/List/Computed`, `…/Detail/Computed`, `…/Card/Computed` (reuses the
+`stringMapPage`/column-list patterns; canonical paths registered in `nav.go`); wedit —
+`CONFIG_SCHEMA` list/`detail`/`card` objects gain a `computed` array
+(`collectionEditor` rows: name/label/type/expression). The generated admin gets no editor UI
+change (computed columns are read-only by design).
+
+**Docs:** `SPEC.md` (schema), `docs/USER_GUIDE.md` (a "Computed fields" section with the
+helper table + per-driver caveats), `AGENTS.md` (touch-points list).
+
+**Files:**
+
+| Path | Purpose |
+|------|---------|
+| `internal/types/resource.go` | `ComputedField{Name, Label, Type, Expression}` + `Computed []ComputedField` on `ListConfig`/`DetailConfig`/`CardConfig` |
+| `internal/types/field.go` | `FieldTypes` unchanged (computed types reuse it) |
+| `internal/generator/helpers.go` (new) | per-driver helper map + `expandHelpers(driver, expr)` (fixpoint regex expansion, comma-split with paren depth, `embedSQL`-safe) |
+| `internal/generator/helpers_test.go` (new) | per-driver expansions, nested args, unknown-helper passthrough, paren-comma split |
+| `internal/generator/handler.go` | list/card: computed `SELECT` items + scan names + CTE wrapper when filter references computed; detail: `compute<Resource>Row` emission + call |
+| `internal/generator/templ.go` | non-sortable computed `<th>` on list/card; detail rows from appended `ColumnDef`s |
+| `internal/parser/validator.go` | `validateComputed` (name/type/expression/dupes) + filter-reference warning |
+| `cmd/yaga/editor/nav.go` | `Computed` canonical paths for list/detail/card |
+| `internal/serve/static/app.js` | `computed` arrays in the wedit tab schema |
+| `docs/USER_GUIDE.md`, `AGENTS.md`, `SPEC.md` | computed-fields docs + helper table |
+
+**Feature-off / regression guards:** a config with **no `computed:`** produces
+byte-identical generated output (existing `TestGenerateFilter`, `TestGenerateOptionsLoaderDedupe`,
+etc. stay green — the new code paths are all gated on `len(computed) > 0`).
+
+**Tests / exit criteria:** `TestExpandHelpers` (all helpers, three drivers, nested
+`helpers.` inside args, paren-split with commas inside `coalesce(a, now())`); generator
+tests — `TestGenerateListWithComputed` (SELECT items + scan names + non-sortable header),
+`TestGenerateDetailWithComputed` (compute helper emitted + called, item map augmented),
+`TestGenerateCardWithComputed` (kanban + grid), `TestGenerateFilterWithComputed` (CTE
+wrapper with `$N` params + windowed count on the outer query, postgres/sqlite/mssql
+variants), `TestGenerateComputedFeatureOff` (byte-identical); parser tests —
+`TestValidateComputed` (empty/dup name, unknown type, empty expression, filter reference
+to a real column OK + to an unknown computed Warning); `TestComputedFieldRoundTrip`
+(types parse/marshal). `go vet ./...` / `go build ./...` / `go test ./...` clean;
+E2E — generate a kitchen-style config with a `computed` date_diff/coalesce column, `make`,
+assert the column renders (sqlite).

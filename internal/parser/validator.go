@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	luasrc "github.com/MichalHerstus/yaga/internal/generator/luasrc"
 	"github.com/MichalHerstus/yaga/internal/types"
 )
 
@@ -187,6 +188,21 @@ func ValidateAll(cfg *types.Config) []error {
 				add(fmt.Errorf("resources[%d] (%s) card.filter: %w", i, r.Name, fe))
 			}
 		}
+		if r.List != nil {
+			for _, fe := range validateComputedFields(r.List.Computed, columnNamesOf(r.List.Columns), fmt.Sprintf("resources[%d] (%s) list", i, r.Name)) {
+				add(fe)
+			}
+		}
+		if r.Card != nil {
+			for _, fe := range validateComputedFields(r.Card.Computed, fieldNamesOf(r.Card.Fields), fmt.Sprintf("resources[%d] (%s) card", i, r.Name)) {
+				add(fe)
+			}
+		}
+		if r.Detail != nil {
+			for _, fe := range validateComputedFields(r.Detail.Computed, fieldNamesOf(r.Detail.Fields), fmt.Sprintf("resources[%d] (%s) detail", i, r.Name)) {
+				add(fe)
+			}
+		}
 		if err := validateResourceHooks(r); err != nil {
 			add(fmt.Errorf("resources[%d]: %w", i, err))
 		}
@@ -198,6 +214,7 @@ func ValidateAll(cfg *types.Config) []error {
 		}
 	}
 	validateProcedures(cfg, add)
+	validateScripts(cfg, add)
 	for i, p := range cfg.Pages {
 		if p.Name == "" {
 			add(fmt.Errorf("pages[%d].name is required", i))
@@ -341,6 +358,51 @@ func validateProcedures(cfg *types.Config, add func(error)) {
 	}
 }
 
+// validateScripts walks every Lua script body in the config and emits a
+// non-blocking Warning for each syntax error found by the Lua parser.
+func validateScripts(cfg *types.Config, add func(error)) {
+	for i, r := range cfg.Resources {
+		checkHookScripts := func(hooks *types.Hooks, label string) {
+			if hooks == nil {
+				return
+			}
+			for j, h := range hooks.Before {
+				if h.Script != "" {
+					for _, e := range luasrc.SyntaxCheck(h.Script) {
+						add(warn("resources[%d] (%s) %s before[%d] %s script: %d: %s", i, r.Name, label, j, h.Name, e.Line, e.Message))
+					}
+				}
+			}
+			for j, h := range hooks.After {
+				if h.Script != "" {
+					for _, e := range luasrc.SyntaxCheck(h.Script) {
+						add(warn("resources[%d] (%s) %s after[%d] %s script: %d: %s", i, r.Name, label, j, h.Name, e.Line, e.Message))
+					}
+				}
+			}
+		}
+		if r.Form != nil {
+			if r.Form.Create != nil {
+				checkHookScripts(r.Form.Create.Hooks, "create")
+			}
+			if r.Form.Update != nil {
+				checkHookScripts(r.Form.Update.Hooks, "update")
+			}
+			if r.Form.Delete != nil {
+				checkHookScripts(r.Form.Delete.Hooks, "delete")
+			}
+		}
+		for j, a := range r.Actions {
+			if a.Script != "" {
+				for _, e := range luasrc.SyntaxCheck(a.Script) {
+					add(warn("resources[%d] (%s) action[%d] %s script: %d: %s", i, r.Name, j, a.Name, e.Line, e.Message))
+				}
+			}
+			checkHookScripts(a.Hooks, "action "+a.Name)
+		}
+	}
+}
+
 // procRefs returns every proc: reference on a resource as a map keyed by a
 // human-readable "action <name>" / "action <name> hook <name>" label so
 // validation errors name the exact site.
@@ -422,6 +484,58 @@ func validateFilter(f *types.FilterConfig) []error {
 			errs = append(errs, fmt.Errorf("params[%d].name %q is duplicated", i, p.Name))
 		}
 		seen[p.Name] = true
+	}
+	return errs
+}
+
+// columnNamesOf extracts the names of a list's columns.
+func columnNamesOf(cols []types.Column) []string {
+	var names []string
+	for _, c := range cols {
+		names = append(names, c.Name)
+	}
+	return names
+}
+
+// fieldNamesOf extracts the names of a section's fields.
+func fieldNamesOf(fields []types.Field) []string {
+	var names []string
+	for _, f := range fields {
+		names = append(names, f.Name)
+	}
+	return names
+}
+
+// validateComputedFields checks a section's virtual computed fields (E7).
+// Each entry needs a name, a non-empty expression and no collisions with a real
+// column/field of the same section — a duplicate alias breaks both the SELECT
+// and the emitted Go scan source. Unsupported types are a non-fatal warning
+// (renderers already fall back to plain text).
+func validateComputedFields(computed []types.ComputedField, realNames []string, path string) []error {
+	var errs []error
+	seen := map[string]bool{}
+	for i, c := range computed {
+		if c.Name == "" {
+			errs = append(errs, fmt.Errorf("%s[%d] computed name is required", path, i))
+			continue
+		}
+		if seen[c.Name] {
+			errs = append(errs, fmt.Errorf("%s[%d] computed name %q is duplicated", path, i, c.Name))
+		}
+		seen[c.Name] = true
+		if c.Expression == "" {
+			errs = append(errs, fmt.Errorf("%s[%d] computed %q expression is required", path, i, c.Name))
+		}
+		if c.Type != "" {
+			if _, ok := types.FieldTypes[c.Type]; !ok {
+				errs = append(errs, warn("%s[%d] computed %q type %q is not a supported field type, rendering as string", path, i, c.Name, c.Type))
+			}
+		}
+		for _, rn := range realNames {
+			if rn == c.Name {
+				errs = append(errs, fmt.Errorf("%s[%d] computed name %q collides with a real column", path, i, c.Name))
+			}
+		}
 	}
 	return errs
 }

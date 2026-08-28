@@ -94,6 +94,9 @@ func (e *Editor) listPage(idx int) tview.Primitive {
 		e.addButton(f, "Columns", func() {
 			e.showPage(e.resColumnsPath(idx), e.columnsPage(idx))
 		})
+		e.addButton(f, "Computed", func() {
+			e.showPage(e.resListComputedPath(idx), e.listComputedPage(idx))
+		})
 		e.addButton(f, "Filter", func() {
 			e.showPage(e.resListFilterPath(idx), e.filterPage(idx, "list"))
 		})
@@ -121,6 +124,9 @@ func (e *Editor) cardPage(idx int) tview.Primitive {
 		e.pick(f, "Kanban field", kanbanOpts(), c.KanbanField, func(v string) { c.KanbanField = v })
 		e.addButton(f, "Fields", func() {
 			e.showPage(e.resCardFieldsPath(idx), e.cardFieldsPage(idx))
+		})
+		e.addButton(f, "Computed", func() {
+			e.showPage(e.resCardComputedPath(idx), e.cardComputedPage(idx))
 		})
 		e.addButton(f, "Searchable", func() {
 			path := e.resCardPath(idx) + "/Searchable"
@@ -151,6 +157,9 @@ func (e *Editor) detailPage(idx int) tview.Primitive {
 		})
 		e.addButton(f, "Fields", func() {
 			e.showPage(e.resDetailFieldsPath(idx), e.detailFieldsPage(idx))
+		})
+		e.addButton(f, "Computed", func() {
+			e.showPage(e.resDetailComputedPath(idx), e.detailComputedPage(idx))
 		})
 	})
 }

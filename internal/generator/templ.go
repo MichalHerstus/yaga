@@ -173,7 +173,8 @@ func renderCell(fieldType, expr string) string {
 // Params: dir (view directory), r (the resource definition).
 // Returns: an error on write failure.
 func (g *Generator) generateListTempl(dir string, r types.Resource) error {
-	cols := r.List.Columns
+	cols := append([]types.Column{}, r.List.Columns...)
+	cols = append(cols, computedColumns(r.List.Computed)...)
 	templName := r.Name + "List"
 	resLabel := r.Label
 	resLower := strings.ToLower(r.Name)
@@ -429,7 +430,9 @@ func (g *Generator) generateDetailTempl(dir string, r types.Resource) error {
 	panelPath := g.Config.Panel.Path
 
 	var rows strings.Builder
-	for _, f := range r.Detail.Fields {
+	detailFields := append([]types.Field{}, r.Detail.Fields...)
+	detailFields = append(detailFields, computedFields(r.Detail.Computed)...)
+	for _, f := range detailFields {
 		label := f.Label
 		if label == "" {
 			label = f.Name
@@ -1037,7 +1040,8 @@ func pickerFooter() string {
 // Params: dir (view directory), r (the resource definition).
 // Returns: an error on write failure.
 func (g *Generator) generateCardTempl(dir string, r types.Resource) error {
-	fields := r.Card.Fields
+	fields := append([]types.Field{}, r.Card.Fields...)
+	fields = append(fields, computedFields(r.Card.Computed)...)
 	templName := r.Name + "Cards"
 	resLabel := r.Label
 	resLower := strings.ToLower(r.Name)
