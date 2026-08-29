@@ -1199,8 +1199,9 @@ func pkGoType(ti TableInfo, driver string) string {
 // missing, inserts an admin user when the users table is empty, then generates
 // yaga.yaml — including the captured `schema:` block. No SQL files are
 // written: the generator runs offline from the schema block (D11).
-func cmdInitFromDB(configPath, outDir, dsn, adminPassword string, force bool) error {
-	if !force {
+// If updateMode is true, merges new tables into existing config instead of overwriting.
+func cmdInitFromDB(configPath, outDir, dsn, adminPassword string, force, updateMode bool) error {
+	if !force && !updateMode {
 		if _, err := os.Stat(configPath); err == nil {
 			return fmt.Errorf("%s already exists. Use --force to overwrite.", configPath)
 		}
@@ -1260,6 +1261,10 @@ func cmdInitFromDB(configPath, outDir, dsn, adminPassword string, force bool) er
 		return fmt.Errorf("re-introspecting schema: %w", err)
 	}
 
+	if updateMode {
+		return cmdInitUpdate(configPath, dsn, driver, tables)
+	}
+
 	// Write yaga.yaml (includes the captured schema block)
 	if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
 		return fmt.Errorf("creating config directory: %w", err)
@@ -1274,4 +1279,560 @@ func cmdInitFromDB(configPath, outDir, dsn, adminPassword string, force bool) er
 	fmt.Println("  1. Review", configPath, "(the schema: block is the sole schema source)")
 	fmt.Println("  2. Run 'yaga generate --config", configPath, "--out", outDir, "'")
 	return nil
+}
+
+// cmdInitUpdate handles the --update mode: merges newly introspected tables
+// into an existing yaga.yaml while preserving user customizations.
+func cmdInitUpdate(configPath, dsn, driver string, tables []TableInfo) error {
+	// Read existing config
+	existingYAML, err := os.ReadFile(configPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			// Config doesn't exist, fall back to full init
+			fmt.Println("Config file not found, creating new config...")
+			return os.WriteFile(configPath, []byte(generateYAML(tables, driver, dsn)), 0644)
+		}
+		return fmt.Errorf("reading config file: %w", err)
+	}
+
+	// Merge resources
+	mergedYAML, added, orphaned, err := mergeResources(existingYAML, tables, driver, dsn)
+	if err != nil {
+		return fmt.Errorf("merging resources: %w", err)
+	}
+
+	// Write merged config
+	if err := os.WriteFile(configPath, mergedYAML, 0644); err != nil {
+		return fmt.Errorf("writing config: %w", err)
+	}
+
+	fmt.Println("Introspected database and updated config:", configPath)
+	fmt.Println("Schema block updated")
+	if len(added) > 0 {
+		fmt.Printf("Added %d new resource(s): %s\n", len(added), strings.Join(added, ", "))
+	} else {
+		fmt.Println("No new tables found")
+	}
+	if len(orphaned) > 0 {
+		fmt.Printf("Orphaned resources (table dropped): %s (marked with comment)\n", strings.Join(orphaned, ", "))
+	}
+	fmt.Println("")
+	fmt.Println("Next steps:")
+	fmt.Println("  1. Review", configPath, "(the schema: block is the sole schema source)")
+	fmt.Println("  2. Run 'yaga generate --config", configPath, "--out ./admin'")
+	return nil
+}
+
+// mergeResources merges introspected tables into existing YAML config.
+// Returns merged YAML bytes, added resource names, orphaned resource names, error.
+func mergeResources(existingYAML []byte, tables []TableInfo, driver, dsn string) ([]byte, []string, []string, error) {
+	var doc yaml.Node
+	if err := yaml.Unmarshal(existingYAML, &doc); err != nil {
+		return nil, nil, nil, fmt.Errorf("parsing existing yaml: %w", err)
+	}
+	root, err := mappingOf(&doc)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("parsing existing yaml: %w", err)
+	}
+
+	// Build map of existing resources by table name
+	existingByTable := buildExistingResourceMap(root)
+
+	// Build map of introspected tables by name
+	introspectedByName := make(map[string]TableInfo)
+	for _, ti := range tables {
+		if ti.Name == "users" || ti.Name == "roles" {
+			continue
+		}
+		introspectedByName[ti.Name] = ti
+	}
+
+	// Find new tables (in DB but not in config)
+	var added []string
+	for tableName, ti := range introspectedByName {
+		if _, exists := existingByTable[tableName]; !exists {
+			// Generate resource node for new table
+			resNode := writeResourceYAMLNode(ti, tables, driver)
+			// Insert into resources sequence
+			insertResourceNode(root, resNode)
+			added = append(added, toSingularPascal(ti.Name))
+		}
+	}
+
+	// Find orphaned resources (in config but not in DB)
+	var orphaned []string
+	for tableName, resNode := range existingByTable {
+		if _, exists := introspectedByName[tableName]; !exists {
+			// Mark as orphaned with comment
+			addOrphanedComment(resNode, tableName)
+			orphaned = append(orphaned, toSingularPascal(tableName))
+		}
+	}
+
+	// Replace schema block entirely (source of truth)
+	replaceSchemaBlock(root, tables, driver)
+
+	// Update default connection DSN
+	updateConnectionDSN(root, dsn)
+
+	// Marshal back to YAML
+	out, err := yaml.Marshal(root)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("encoding yaml: %w", err)
+	}
+
+	return out, added, orphaned, nil
+}
+
+// buildExistingResourceMap builds a map of table name -> resource node from the existing config.
+func buildExistingResourceMap(root *yaml.Node) map[string]*yaml.Node {
+	result := make(map[string]*yaml.Node)
+	ri := mappingIndex(root, "resources")
+	if ri < 0 {
+		return result
+	}
+	ress := root.Content[ri+1]
+	if ress.Kind != yaml.SequenceNode {
+		return result
+	}
+	for _, res := range ress.Content {
+		if res.Kind != yaml.MappingNode {
+			continue
+		}
+		// Get table name from resource (explicit table: or derived from name)
+		tableName := mappingValue(res, "table")
+		if tableName == "" {
+			// Derive from resource name (pluralize)
+			resName := mappingValue(res, "name")
+			tableName = pluralize(resName)
+		}
+		result[tableName] = res
+	}
+	return result
+}
+
+// pluralize converts a singular PascalCase resource name to plural table name.
+// Reverse of singularize/toSingularPascal. Matches the convention in generateYAML:
+// resource "Product" -> table "products" (lowercase + s)
+func pluralize(name string) string {
+	return strings.ToLower(name) + "s"
+}
+
+// writeResourceYAMLNode generates a yaml.Node for a resource (like writeResourceYAML but node-based).
+func writeResourceYAMLNode(ti TableInfo, allTables []TableInfo, driver string) *yaml.Node {
+	resourceName := toSingularPascal(ti.Name)
+	pluralPascal := toPascalCase(ti.Name)
+	pk := findPKColumn(ti)
+
+	res := &yaml.Node{Kind: yaml.MappingNode}
+
+	// name
+	res.Content = append(res.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Value: "name"},
+		&yaml.Node{Kind: yaml.ScalarNode, Value: resourceName})
+
+	// label
+	res.Content = append(res.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Value: "label"},
+		&yaml.Node{Kind: yaml.ScalarNode, Value: pluralPascal})
+
+	// table (if different from pluralized name)
+	if strings.ToLower(resourceName)+"s" != ti.Name {
+		res.Content = append(res.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Value: "table"},
+			&yaml.Node{Kind: yaml.ScalarNode, Value: ti.Name})
+	}
+
+	// id_column (if not "id")
+	if idCol := idColumnName(ti); idCol != "" && idCol != "id" {
+		res.Content = append(res.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Value: "id_column"},
+			&yaml.Node{Kind: yaml.ScalarNode, Value: idCol})
+	}
+
+	// id_type (if non-default)
+	pkGo := pkGoType(ti, driver)
+	defaultPKGo := "int32"
+	if driver == "sqlite" {
+		defaultPKGo = "int64"
+	}
+	if pkGo != "" && pkGo != defaultPKGo {
+		res.Content = append(res.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Value: "id_type"},
+			&yaml.Node{Kind: yaml.ScalarNode, Value: pkGo})
+	}
+
+	defaultSort := findDefaultSort(ti)
+
+	// list section
+	listNode := &yaml.Node{Kind: yaml.MappingNode}
+	listNode.Content = append(listNode.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Value: "query"},
+		&yaml.Node{Kind: yaml.ScalarNode, Value: fmt.Sprintf("List%s", pluralPascal)})
+	listNode.Content = append(listNode.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Value: "count_query"},
+		&yaml.Node{Kind: yaml.ScalarNode, Value: fmt.Sprintf("Count%s", pluralPascal)})
+
+	// columns
+	colsNode := &yaml.Node{Kind: yaml.SequenceNode}
+	for _, c := range ti.Columns {
+		isFK := false
+		for _, fk := range ti.ForeignKeys {
+			if fk.Column == c.Name {
+				isFK = true
+				break
+			}
+		}
+		if isFK {
+			continue
+		}
+		colNode := createColumnNode(c)
+		colsNode.Content = append(colsNode.Content, colNode)
+	}
+
+	// FK label columns in the list
+	for _, fk := range ti.ForeignKeys {
+		foreignTable := findTableByName(allTables, fk.ForeignTable)
+		if foreignTable == nil {
+			continue
+		}
+		labelCol := findLabelColumn(*foreignTable)
+		colName := fk.Column + "_label"
+		colNode := &yaml.Node{Kind: yaml.MappingNode}
+		colNode.Content = append(colNode.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Value: "name"},
+			&yaml.Node{Kind: yaml.ScalarNode, Value: colName})
+		colNode.Content = append(colNode.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Value: "label"},
+			&yaml.Node{Kind: yaml.ScalarNode, Value: toPascalCase(singularize(fk.ForeignTable))})
+		colNode.Content = append(colNode.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Value: "type"},
+			&yaml.Node{Kind: yaml.ScalarNode, Value: "string"})
+		_ = labelCol
+		colsNode.Content = append(colsNode.Content, colNode)
+	}
+
+	listNode.Content = append(listNode.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Value: "columns"},
+		colsNode)
+
+	if defaultSort != "" {
+		listNode.Content = append(listNode.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Value: "default_sort"},
+			&yaml.Node{Kind: yaml.ScalarNode, Value: "-" + defaultSort})
+	}
+
+	res.Content = append(res.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Value: "list"},
+		listNode)
+
+	// detail section (views: only if integer key)
+	emitDetail := !ti.IsView || viewKeyIsInt(ti)
+	if emitDetail {
+		detailNode := &yaml.Node{Kind: yaml.MappingNode}
+		detailNode.Content = append(detailNode.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Value: "query"},
+			&yaml.Node{Kind: yaml.ScalarNode, Value: fmt.Sprintf("Get%s", toSingularPascal(ti.Name))})
+		paramsNode := &yaml.Node{Kind: yaml.MappingNode}
+		paramsNode.Content = append(paramsNode.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Value: "id"},
+			&yaml.Node{Kind: yaml.ScalarNode, Value: fmt.Sprintf("{record.%s}", pk)})
+		detailNode.Content = append(detailNode.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Value: "params"},
+			paramsNode)
+
+		fieldsNode := &yaml.Node{Kind: yaml.SequenceNode}
+		for _, c := range ti.Columns {
+			fieldNode := createFieldNode(c, ti, allTables, driver, false)
+			fieldsNode.Content = append(fieldsNode.Content, fieldNode)
+		}
+		detailNode.Content = append(detailNode.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Value: "fields"},
+			fieldsNode)
+		res.Content = append(res.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Value: "detail"},
+			detailNode)
+	}
+
+	if ti.IsView {
+		// Views are read-only: card only, no form
+		cardNode := &yaml.Node{Kind: yaml.MappingNode}
+		fieldsNode := &yaml.Node{Kind: yaml.SequenceNode}
+		for _, c := range ti.Columns {
+			fieldNode := createFieldNode(c, ti, allTables, driver, true)
+			fieldsNode.Content = append(fieldsNode.Content, fieldNode)
+		}
+		cardNode.Content = append(cardNode.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Value: "fields"},
+			fieldsNode)
+		res.Content = append(res.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Value: "card"},
+			cardNode)
+		return res
+	}
+
+	// form section
+	formNode := &yaml.Node{Kind: yaml.MappingNode}
+
+	// create
+	createNode := &yaml.Node{Kind: yaml.MappingNode}
+	createNode.Content = append(createNode.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Value: "query"},
+		&yaml.Node{Kind: yaml.ScalarNode, Value: fmt.Sprintf("Create%s", toSingularPascal(ti.Name))})
+	createFieldsNode := &yaml.Node{Kind: yaml.SequenceNode}
+	for _, c := range ti.Columns {
+		if c.IsPrimaryKey {
+			continue
+		}
+		if c.Default != "" && c.Nullable {
+			continue
+		}
+		fieldNode := createFieldNode(c, ti, allTables, driver, true)
+		createFieldsNode.Content = append(createFieldsNode.Content, fieldNode)
+	}
+	createNode.Content = append(createNode.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Value: "fields"},
+		createFieldsNode)
+	formNode.Content = append(formNode.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Value: "create"},
+		createNode)
+
+	// update
+	updateNode := &yaml.Node{Kind: yaml.MappingNode}
+	updateNode.Content = append(updateNode.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Value: "query"},
+		&yaml.Node{Kind: yaml.ScalarNode, Value: fmt.Sprintf("Update%s", toSingularPascal(ti.Name))})
+	updateNode.Content = append(updateNode.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Value: "populate_query"},
+		&yaml.Node{Kind: yaml.ScalarNode, Value: fmt.Sprintf("Get%s", toSingularPascal(ti.Name))})
+	updateFieldsNode := &yaml.Node{Kind: yaml.SequenceNode}
+	for _, c := range ti.Columns {
+		if c.IsPrimaryKey {
+			continue
+		}
+		fieldNode := createFieldNode(c, ti, allTables, driver, true)
+		updateFieldsNode.Content = append(updateFieldsNode.Content, fieldNode)
+	}
+	updateNode.Content = append(updateNode.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Value: "fields"},
+		updateFieldsNode)
+	formNode.Content = append(formNode.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Value: "update"},
+		updateNode)
+
+	res.Content = append(res.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Value: "form"},
+		formNode)
+
+	// children: reverse FKs
+	var children []TableInfo
+	for _, other := range allTables {
+		if other.IsView || other.Name == ti.Name {
+			continue
+		}
+		for _, fk := range other.ForeignKeys {
+			if strings.EqualFold(fk.ForeignTable, ti.Name) && strings.EqualFold(fk.ForeignColumn, pk) {
+				children = append(children, other)
+				break
+			}
+		}
+	}
+	if len(children) > 0 {
+		childrenNode := &yaml.Node{Kind: yaml.SequenceNode}
+		for _, other := range children {
+			childNode := &yaml.Node{Kind: yaml.MappingNode}
+			childNode.Content = append(childNode.Content,
+				&yaml.Node{Kind: yaml.ScalarNode, Value: "name"},
+				&yaml.Node{Kind: yaml.ScalarNode, Value: toPascalCase(other.Name)})
+			childNode.Content = append(childNode.Content,
+				&yaml.Node{Kind: yaml.ScalarNode, Value: "resource"},
+				&yaml.Node{Kind: yaml.ScalarNode, Value: toSingularPascal(other.Name)})
+			for _, fk := range other.ForeignKeys {
+				if strings.EqualFold(fk.ForeignTable, ti.Name) && strings.EqualFold(fk.ForeignColumn, pk) {
+					childNode.Content = append(childNode.Content,
+						&yaml.Node{Kind: yaml.ScalarNode, Value: "column"},
+						&yaml.Node{Kind: yaml.ScalarNode, Value: fk.Column})
+					break
+				}
+			}
+			childrenNode.Content = append(childrenNode.Content, childNode)
+		}
+		res.Content = append(res.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Value: "children"},
+			childrenNode)
+	}
+
+	return res
+}
+
+// createColumnNode creates a list column node from ColumnInfo.
+func createColumnNode(c ColumnInfo) *yaml.Node {
+	ft := mapDBTypeToFieldType(c.DBType)
+	colNode := &yaml.Node{Kind: yaml.MappingNode}
+	colNode.Content = append(colNode.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Value: "name"},
+		&yaml.Node{Kind: yaml.ScalarNode, Value: c.Name})
+	colNode.Content = append(colNode.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Value: "type"},
+		&yaml.Node{Kind: yaml.ScalarNode, Value: ft})
+	if c.IsPrimaryKey || ft == "integer" {
+		colNode.Content = append(colNode.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Value: "sortable"},
+			&yaml.Node{Kind: yaml.ScalarNode, Value: "true"})
+	}
+	if ft == "string" || ft == "email" {
+		colNode.Content = append(colNode.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Value: "searchable"},
+			&yaml.Node{Kind: yaml.ScalarNode, Value: "true"})
+	}
+	return colNode
+}
+
+// createFieldNode creates a detail/form field node from ColumnInfo.
+func createFieldNode(c ColumnInfo, ti TableInfo, allTables []TableInfo, driver string, isForm bool) *yaml.Node {
+	for _, fk := range ti.ForeignKeys {
+		if fk.Column == c.Name {
+			fieldNode := &yaml.Node{Kind: yaml.MappingNode}
+			fieldNode.Content = append(fieldNode.Content,
+				&yaml.Node{Kind: yaml.ScalarNode, Value: "name"},
+				&yaml.Node{Kind: yaml.ScalarNode, Value: c.Name})
+			if isForm {
+				fieldNode.Content = append(fieldNode.Content,
+					&yaml.Node{Kind: yaml.ScalarNode, Value: "type"},
+					&yaml.Node{Kind: yaml.ScalarNode, Value: "relation"})
+				fieldNode.Content = append(fieldNode.Content,
+					&yaml.Node{Kind: yaml.ScalarNode, Value: "options_value"},
+					&yaml.Node{Kind: yaml.ScalarNode, Value: fk.ForeignColumn})
+				labelCol := findLabelColumnByTable(allTables, fk.ForeignTable)
+				fieldNode.Content = append(fieldNode.Content,
+					&yaml.Node{Kind: yaml.ScalarNode, Value: "options_label"},
+					&yaml.Node{Kind: yaml.ScalarNode, Value: labelCol})
+			} else {
+				ft := mapDBTypeToFieldType(c.DBType)
+				fieldNode.Content = append(fieldNode.Content,
+					&yaml.Node{Kind: yaml.ScalarNode, Value: "type"},
+					&yaml.Node{Kind: yaml.ScalarNode, Value: ft})
+			}
+			return fieldNode
+		}
+	}
+
+	ft := mapDBTypeToFieldType(c.DBType)
+	fieldNode := &yaml.Node{Kind: yaml.MappingNode}
+	fieldNode.Content = append(fieldNode.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Value: "name"},
+		&yaml.Node{Kind: yaml.ScalarNode, Value: c.Name})
+	fieldNode.Content = append(fieldNode.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Value: "type"},
+		&yaml.Node{Kind: yaml.ScalarNode, Value: ft})
+	if c.Name == "password" {
+		// Override type for password field
+		for i := 0; i < len(fieldNode.Content); i += 2 {
+			if fieldNode.Content[i].Value == "type" {
+				fieldNode.Content[i+1].Value = "password"
+				break
+			}
+		}
+	}
+	return fieldNode
+}
+
+// insertResourceNode inserts a new resource node into the resources sequence.
+func insertResourceNode(root *yaml.Node, resNode *yaml.Node) {
+	ri := mappingIndex(root, "resources")
+	if ri < 0 {
+		// Create resources sequence if it doesn't exist
+		resourcesSeq := &yaml.Node{Kind: yaml.SequenceNode}
+		root.Content = append(root.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Value: "resources"},
+			resourcesSeq)
+		resourcesSeq.Content = append(resourcesSeq.Content, resNode)
+		return
+	}
+	ress := root.Content[ri+1]
+	if ress.Kind != yaml.SequenceNode {
+		return
+	}
+	ress.Content = append(ress.Content, resNode)
+}
+
+// addOrphanedComment adds a comment to mark a resource as orphaned.
+func addOrphanedComment(resNode *yaml.Node, tableName string) {
+	comment := fmt.Sprintf(" ORPHANED: table '%s' no longer exists in database", tableName)
+	// Add line comment to the resource mapping node
+	if resNode.HeadComment == "" {
+		resNode.HeadComment = comment
+	} else {
+		resNode.HeadComment += "\n" + comment
+	}
+}
+
+// replaceSchemaBlock replaces the entire schema: block with fresh introspection.
+func replaceSchemaBlock(root *yaml.Node, tables []TableInfo, driver string) {
+	// Remove existing schema key if present
+	si := mappingIndex(root, "schema")
+	if si >= 0 {
+		root.Content = append(root.Content[:si], root.Content[si+2:]...)
+	}
+
+	// Build new schema node
+	schema := convertSchema(tables, driver)
+	var buf strings.Builder
+	enc := yaml.NewEncoder(&buf)
+	enc.SetIndent(2)
+	_ = enc.Encode(schema)
+	_ = enc.Close()
+
+	var schemaDoc yaml.Node
+	if err := yaml.Unmarshal([]byte(buf.String()), &schemaDoc); err != nil {
+		return // Should not happen
+	}
+	schemaRoot, _ := mappingOf(&schemaDoc)
+
+	// Insert at the beginning (after version, before connections)
+	// Find insertion point: after version, panel, before connections
+	insertIdx := 0
+	for i := 0; i < len(root.Content); i += 2 {
+		if root.Content[i].Value == "connections" {
+			insertIdx = i
+			break
+		}
+	}
+
+	// Insert schema key and value
+	newContent := make([]*yaml.Node, 0, len(root.Content)+2)
+	newContent = append(newContent, root.Content[:insertIdx]...)
+	newContent = append(newContent,
+		&yaml.Node{Kind: yaml.ScalarNode, Value: "schema"},
+		schemaRoot)
+	newContent = append(newContent, root.Content[insertIdx:]...)
+	root.Content = newContent
+}
+
+// updateConnectionDSN updates the default connection DSN.
+func updateConnectionDSN(root *yaml.Node, dsn string) {
+	ci := mappingIndex(root, "connections")
+	if ci < 0 {
+		return
+	}
+	conns := root.Content[ci+1]
+	if conns.Kind != yaml.MappingNode {
+		return
+	}
+	di := mappingIndex(conns, "default")
+	if di < 0 {
+		return
+	}
+	def := conns.Content[di+1]
+	if def.Kind != yaml.MappingNode {
+		return
+	}
+	dsi := mappingIndex(def, "dsn")
+	if dsi >= 0 {
+		def.Content[dsi+1].Value = dsn
+	} else {
+def.Content = append(def.Content,
+		&yaml.Node{Kind: yaml.ScalarNode, Value: "dsn"},
+		&yaml.Node{Kind: yaml.ScalarNode, Value: dsn})
+	}
 }

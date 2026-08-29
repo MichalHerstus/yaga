@@ -10,7 +10,7 @@ import (
 )
 
 func cmdEdit() {
-	configPath, _, _, _, _, _, _ := parseGlobalFlags()
+	configPath, _, _, _, _, _, _, _ := parseGlobalFlags()
 	apiKey, model, prompt, dryRun := parseEditFlags(os.Args[2:])
 
 	// D7: AI-assisted editing (opt-in). When --prompt is set, the AI path runs

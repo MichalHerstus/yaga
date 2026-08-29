@@ -348,3 +348,502 @@ func TestIntrospectSQLiteKeywordTable(t *testing.T) {
 		t.Fatalf("Customer FK should reference Order, got %+v", customer.ForeignKeys)
 	}
 }
+
+// TestMergeResourcesAddNew tests that new tables are added to existing config.
+func TestMergeResourcesAddNew(t *testing.T) {
+	// Existing config with one resource (User)
+	existingYAML := `
+version: "1.0"
+panel:
+  id: admin
+  path: /admin
+  name: "My Admin"
+connections:
+  default:
+    driver: sqlite
+    dsn: "file:test.db"
+schema:
+  tables:
+    - name: users
+      pk: id
+      columns:
+        - name: id
+          type: integer
+          primary_key: true
+    - name: posts
+      pk: id
+      columns:
+        - name: id
+          type: integer
+          primary_key: true
+        - name: title
+          type: string
+resources:
+  - name: Post
+    label: Posts
+    table: posts
+    list:
+      query: ListPosts
+      count_query: CountPosts
+      columns:
+        - name: id
+          type: integer
+          sortable: true
+        - name: title
+          type: string
+          searchable: true
+      default_sort: -created_at
+`
+
+	// Introspected tables: users, posts, AND new table "comments"
+	tables := []TableInfo{
+		{Name: "users", Columns: []ColumnInfo{{Name: "id", DBType: "integer", IsPrimaryKey: true}}},
+		{Name: "posts", Columns: []ColumnInfo{{Name: "id", DBType: "integer", IsPrimaryKey: true}, {Name: "title", DBType: "text"}, {Name: "created_at", DBType: "timestamp"}}},
+		{Name: "comments", Columns: []ColumnInfo{{Name: "id", DBType: "integer", IsPrimaryKey: true}, {Name: "post_id", DBType: "integer"}, {Name: "body", DBType: "text"}}, ForeignKeys: []ForeignKeyInfo{{Column: "post_id", ForeignTable: "posts", ForeignColumn: "id"}}},
+	}
+
+	mergedYAML, added, orphaned, err := mergeResources([]byte(existingYAML), tables, "sqlite", "file:test.db")
+	if err != nil {
+		t.Fatalf("mergeResources failed: %v", err)
+	}
+
+	// Should have added Comment resource
+	if len(added) != 1 || added[0] != "Comment" {
+		t.Fatalf("expected added=[Comment], got %v", added)
+	}
+
+	// Should have no orphaned
+	if len(orphaned) != 0 {
+		t.Fatalf("expected no orphaned, got %v", orphaned)
+	}
+
+	// Verify merged YAML has Comment resource
+	var merged struct {
+		Resources []struct {
+			Name string `yaml:"name"`
+		} `yaml:"resources"`
+	}
+	if err := yaml.Unmarshal(mergedYAML, &merged); err != nil {
+		t.Fatalf("merged YAML parse failed: %v", err)
+	}
+
+	foundComment := false
+	for _, r := range merged.Resources {
+		if r.Name == "Comment" {
+			foundComment = true
+			break
+		}
+	}
+	if !foundComment {
+		t.Fatal("Comment resource not found in merged YAML")
+	}
+
+	// Verify Post resource still exists (preserved)
+	foundPost := false
+	for _, r := range merged.Resources {
+		if r.Name == "Post" {
+			foundPost = true
+			break
+		}
+	}
+	if !foundPost {
+		t.Fatal("Post resource was not preserved")
+	}
+}
+
+// TestMergeResourcesPreserveCustomizations tests that existing resource customizations are preserved.
+func TestMergeResourcesPreserveCustomizations(t *testing.T) {
+	// Existing config with customized Post resource (custom label, extra column, action)
+	existingYAML := `
+version: "1.0"
+panel:
+  id: admin
+  path: /admin
+  name: "My Admin"
+connections:
+  default:
+    driver: sqlite
+    dsn: "file:test.db"
+schema:
+  tables:
+    - name: users
+      pk: id
+      columns:
+        - name: id
+          type: integer
+          primary_key: true
+    - name: posts
+      pk: id
+      columns:
+        - name: id
+          type: integer
+          primary_key: true
+        - name: title
+          type: string
+resources:
+  - name: Post
+    label: "Blog Posts"  # Custom label
+    table: posts
+    list:
+      query: ListPosts
+      count_query: CountPosts
+      columns:
+        - name: id
+          type: integer
+          sortable: true
+        - name: title
+          type: string
+          searchable: true
+          label: "Post Title"  # Custom label
+        - name: custom_field  # Extra field added by user
+          type: string
+      default_sort: -created_at
+    actions:
+      - name: publish
+        label: "Publish"
+        query: "UPDATE posts SET published = true WHERE id = $1"
+`
+
+	// Introspected tables: users, posts (no new tables)
+	tables := []TableInfo{
+		{Name: "users", Columns: []ColumnInfo{{Name: "id", DBType: "integer", IsPrimaryKey: true}}},
+		{Name: "posts", Columns: []ColumnInfo{{Name: "id", DBType: "integer", IsPrimaryKey: true}, {Name: "title", DBType: "text"}, {Name: "created_at", DBType: "timestamp"}}},
+	}
+
+	mergedYAML, added, orphaned, err := mergeResources([]byte(existingYAML), tables, "sqlite", "file:test.db")
+	if err != nil {
+		t.Fatalf("mergeResources failed: %v", err)
+	}
+
+	// No new tables
+	if len(added) != 0 {
+		t.Fatalf("expected no added, got %v", added)
+	}
+	if len(orphaned) != 0 {
+		t.Fatalf("expected no orphaned, got %v", orphaned)
+	}
+
+	// Verify customizations preserved
+	var merged struct {
+		Resources []struct {
+			Name   string `yaml:"name"`
+			Label  string `yaml:"label"`
+			List   struct {
+				Columns []struct {
+					Name  string `yaml:"name"`
+					Label string `yaml:"label"`
+				} `yaml:"columns"`
+			} `yaml:"list"`
+			Actions []struct {
+				Name  string `yaml:"name"`
+				Label string `yaml:"label"`
+			} `yaml:"actions"`
+		} `yaml:"resources"`
+	}
+	if err := yaml.Unmarshal(mergedYAML, &merged); err != nil {
+		t.Fatalf("merged YAML parse failed: %v", err)
+	}
+
+	if len(merged.Resources) != 1 {
+		t.Fatalf("expected 1 resource, got %d", len(merged.Resources))
+	}
+	res := merged.Resources[0]
+	if res.Name != "Post" {
+		t.Fatalf("expected Post, got %s", res.Name)
+	}
+	if res.Label != "Blog Posts" {
+		t.Fatalf("custom label not preserved: %s", res.Label)
+	}
+	if len(res.List.Columns) != 3 {
+		t.Fatalf("expected 3 columns (including custom_field), got %d", len(res.List.Columns))
+	}
+	// Check custom label preserved
+	foundCustomLabel := false
+	for _, c := range res.List.Columns {
+		if c.Name == "title" && c.Label == "Post Title" {
+			foundCustomLabel = true
+		}
+		if c.Name == "custom_field" {
+			// Custom field should be preserved
+		}
+	}
+	if !foundCustomLabel {
+		t.Fatal("custom column label not preserved")
+	}
+	// Check action preserved
+	if len(res.Actions) != 1 || res.Actions[0].Name != "publish" {
+		t.Fatal("custom action not preserved")
+	}
+}
+
+// TestMergeResourcesOrphaned tests that resources for dropped tables are marked as orphaned.
+func TestMergeResourcesOrphaned(t *testing.T) {
+	// Existing config with Post and Comment resources
+	existingYAML := `
+version: "1.0"
+panel:
+  id: admin
+  path: /admin
+  name: "My Admin"
+connections:
+  default:
+    driver: sqlite
+    dsn: "file:test.db"
+schema:
+  tables:
+    - name: users
+      pk: id
+      columns:
+        - name: id
+          type: integer
+          primary_key: true
+    - name: posts
+      pk: id
+      columns:
+        - name: id
+          type: integer
+          primary_key: true
+        - name: title
+          type: string
+    - name: comments
+      pk: id
+      columns:
+        - name: id
+          type: integer
+          primary_key: true
+        - name: post_id
+          type: integer
+        - name: body
+          type: string
+resources:
+  - name: Post
+    label: Posts
+    table: posts
+    list:
+      query: ListPosts
+      count_query: CountPosts
+      columns:
+        - name: id
+          type: integer
+          sortable: true
+        - name: title
+          type: string
+          searchable: true
+  - name: Comment
+    label: Comments
+    table: comments
+    list:
+      query: ListComments
+      count_query: CountComments
+      columns:
+        - name: id
+          type: integer
+          sortable: true
+        - name: body
+          type: string
+`
+
+	// Introspected tables: users, posts only (comments table dropped)
+	tables := []TableInfo{
+		{Name: "users", Columns: []ColumnInfo{{Name: "id", DBType: "integer", IsPrimaryKey: true}}},
+		{Name: "posts", Columns: []ColumnInfo{{Name: "id", DBType: "integer", IsPrimaryKey: true}, {Name: "title", DBType: "text"}, {Name: "created_at", DBType: "timestamp"}}},
+	}
+
+	mergedYAML, added, orphaned, err := mergeResources([]byte(existingYAML), tables, "sqlite", "file:test.db")
+	if err != nil {
+		t.Fatalf("mergeResources failed: %v", err)
+	}
+
+	if len(added) != 0 {
+		t.Fatalf("expected no added, got %v", added)
+	}
+	if len(orphaned) != 1 || orphaned[0] != "Comment" {
+		t.Fatalf("expected orphaned=[Comment], got %v", orphaned)
+	}
+
+	// Verify Comment resource has orphaned comment
+	var merged struct {
+		Resources []yaml.Node `yaml:"resources"`
+	}
+	if err := yaml.Unmarshal(mergedYAML, &merged); err != nil {
+		t.Fatalf("merged YAML parse failed: %v", err)
+	}
+
+	foundOrphanedComment := false
+	for _, r := range merged.Resources {
+		var res struct {
+			Name string `yaml:"name"`
+		}
+		if err := r.Decode(&res); err != nil {
+			continue
+		}
+		if res.Name == "Comment" {
+			if r.HeadComment != "" && strings.Contains(r.HeadComment, "ORPHANED") {
+				foundOrphanedComment = true
+			}
+			break
+		}
+	}
+	if !foundOrphanedComment {
+		t.Fatal("Comment resource not marked as orphaned")
+	}
+}
+
+// TestMergeResourcesSchemaReplaced tests that schema block is fully replaced.
+func TestMergeResourcesSchemaReplaced(t *testing.T) {
+	existingYAML := `
+version: "1.0"
+panel:
+  id: admin
+  path: /admin
+  name: "My Admin"
+connections:
+  default:
+    driver: sqlite
+    dsn: "file:old.db"
+schema:
+  tables:
+    - name: users
+      pk: id
+      columns:
+        - name: id
+          type: integer
+          primary_key: true
+    - name: posts
+      pk: id
+      columns:
+        - name: id
+          type: integer
+          primary_key: true
+        - name: title
+          type: string
+resources:
+  - name: Post
+    label: Posts
+    table: posts
+    list:
+      query: ListPosts
+      count_query: CountPosts
+      columns:
+        - name: id
+          type: integer
+          sortable: true
+        - name: title
+          type: string
+          searchable: true
+`
+
+	// Introspected tables with NEW column on posts (body) and new table comments
+	tables := []TableInfo{
+		{Name: "users", Columns: []ColumnInfo{{Name: "id", DBType: "integer", IsPrimaryKey: true}}},
+		{Name: "posts", Columns: []ColumnInfo{{Name: "id", DBType: "integer", IsPrimaryKey: true}, {Name: "title", DBType: "text"}, {Name: "body", DBType: "text"}, {Name: "created_at", DBType: "timestamp"}}},
+		{Name: "comments", Columns: []ColumnInfo{{Name: "id", DBType: "integer", IsPrimaryKey: true}, {Name: "post_id", DBType: "integer"}, {Name: "body", DBType: "text"}}, ForeignKeys: []ForeignKeyInfo{{Column: "post_id", ForeignTable: "posts", ForeignColumn: "id"}}},
+	}
+
+	mergedYAML, _, _, err := mergeResources([]byte(existingYAML), tables, "sqlite", "file:new.db")
+	if err != nil {
+		t.Fatalf("mergeResources failed: %v", err)
+	}
+
+	// Verify schema block has new column "body" on posts and new table comments
+	var merged struct {
+		Schema struct {
+			Tables []struct {
+				Name    string `yaml:"name"`
+				Columns []struct {
+					Name string `yaml:"name"`
+				} `yaml:"columns"`
+			} `yaml:"tables"`
+		} `yaml:"schema"`
+		Connections struct {
+			Default struct {
+				DSN string `yaml:"dsn"`
+			} `yaml:"default"`
+		} `yaml:"connections"`
+	}
+	if err := yaml.Unmarshal(mergedYAML, &merged); err != nil {
+		t.Fatalf("merged YAML parse failed: %v", err)
+	}
+
+	// Check posts table has body column
+	foundBody := false
+	for _, t := range merged.Schema.Tables {
+		if t.Name == "posts" {
+			for _, c := range t.Columns {
+				if c.Name == "body" {
+					foundBody = true
+				}
+			}
+		}
+	}
+	if !foundBody {
+		t.Fatal("schema block not updated: posts.body column missing")
+	}
+
+	// Check comments table exists
+	foundComments := false
+	for _, t := range merged.Schema.Tables {
+		if t.Name == "comments" {
+			foundComments = true
+		}
+	}
+	if !foundComments {
+		t.Fatal("schema block not updated: comments table missing")
+	}
+
+	// Check DSN updated
+	if merged.Connections.Default.DSN != "file:new.db" {
+		t.Fatalf("DSN not updated: got %s", merged.Connections.Default.DSN)
+	}
+}
+
+// TestMergeResourcesNoConfig tests fallback to full init when config doesn't exist.
+// This is tested via cmdInitUpdate but we can test the mergeResources behavior with empty YAML.
+func TestMergeResourcesEmptyConfig(t *testing.T) {
+	// Empty/minimal YAML
+	existingYAML := `
+version: "1.0"
+panel:
+  id: admin
+  path: /admin
+  name: "My Admin"
+connections:
+  default:
+    driver: sqlite
+    dsn: "file:test.db"
+schema:
+  tables: []
+resources: []
+`
+
+	tables := []TableInfo{
+		{Name: "users", Columns: []ColumnInfo{{Name: "id", DBType: "integer", IsPrimaryKey: true}}},
+		{Name: "posts", Columns: []ColumnInfo{{Name: "id", DBType: "integer", IsPrimaryKey: true}, {Name: "title", DBType: "text"}}},
+	}
+
+	mergedYAML, added, orphaned, err := mergeResources([]byte(existingYAML), tables, "sqlite", "file:test.db")
+	if err != nil {
+		t.Fatalf("mergeResources failed: %v", err)
+	}
+
+	// Should add Post resource
+	if len(added) != 1 || added[0] != "Post" {
+		t.Fatalf("expected added=[Post], got %v", added)
+	}
+	if len(orphaned) != 0 {
+		t.Fatalf("expected no orphaned, got %v", orphaned)
+	}
+
+	var merged struct {
+		Resources []struct {
+			Name string `yaml:"name"`
+		} `yaml:"resources"`
+	}
+	if err := yaml.Unmarshal(mergedYAML, &merged); err != nil {
+		t.Fatalf("merged YAML parse failed: %v", err)
+	}
+
+	if len(merged.Resources) != 1 || merged.Resources[0].Name != "Post" {
+		t.Fatalf("expected 1 Post resource, got %v", merged.Resources)
+	}
+}

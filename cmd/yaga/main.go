@@ -78,6 +78,8 @@ func printUsage() {
 Usage:
   yaga init --db DSN  Introspect an existing database and generate yaga.yaml
                       (the captured schema: block is the sole schema source)
+  yaga init --db DSN --update
+                      Merge new tables from database into existing yaga.yaml
   yaga edit           Interactive YAML config editor (TUI)
   yaga wedit          Web-based YAML config editor (browser, local HTTP server)
   yaga generate       Generate the admin panel Go application (offline, no sqlc)
@@ -92,6 +94,7 @@ Flags:
   --verbose, -v  Enable verbose logging
   --skip-plugins, -s
                  Skip loading declared plugins (generate cannot use them)
+  --update       Merge new tables into existing config (init only)
   --fix          Auto-repair known-fixable validation problems (e.g. an inert
                  list/card filter block) and rewrite the config
   --dry-run      With validate: show what --fix would apply without writing
@@ -121,8 +124,9 @@ WEdit (wedit only):
 // db (connection string for --db/-d introspection mode, required by init),
 // adminPassword (initial admin password for --db scaffolding, or ""),
 // force (overwrite existing files), verbose (enable verbose logging),
-// skipPlugins (skip loading declared plugins).
-func parseGlobalFlags() (configPath, outDir, db, adminPassword string, force, verbose, skipPlugins bool) {
+// skipPlugins (skip loading declared plugins),
+// updateMode (merge new tables into existing config instead of overwriting).
+func parseGlobalFlags() (configPath, outDir, db, adminPassword string, force, verbose, skipPlugins, updateMode bool) {
 	configPath = "yaga.yaml"
 	outDir = "./admin"
 	db = ""
@@ -130,6 +134,7 @@ func parseGlobalFlags() (configPath, outDir, db, adminPassword string, force, ve
 	force = false
 	verbose = false
 	skipPlugins = false
+	updateMode = false
 
 	args := os.Args[2:]
 	for i := 0; i < len(args); i++ {
@@ -160,6 +165,8 @@ func parseGlobalFlags() (configPath, outDir, db, adminPassword string, force, ve
 			verbose = true
 		case "--skip-plugins", "-s":
 			skipPlugins = true
+		case "--update":
+			updateMode = true
 		}
 	}
 	return
@@ -171,8 +178,10 @@ func parseGlobalFlags() (configPath, outDir, db, adminPassword string, force, ve
 // generator) plus the admin auth tables when missing. The plain starter
 // scaffold and --demo were removed in D11 — the database is the only source
 // of truth.
+// With --update, merges newly introspected tables into an existing yaga.yaml
+// while preserving user customizations (resources, navigation, pages, etc.).
 func cmdInit() {
-	configPath, outDir, dbDSN, adminPassword, force, _, _ := parseGlobalFlags()
+	configPath, outDir, dbDSN, adminPassword, force, _, _, updateMode := parseGlobalFlags()
 
 	if dbDSN == "" {
 		fmt.Fprintln(os.Stderr, "Error: init requires a database connection string: yaga init --db DSN")
@@ -180,7 +189,7 @@ func cmdInit() {
 		os.Exit(1)
 	}
 
-	if err := cmdInitFromDB(configPath, outDir, dbDSN, adminPassword, force); err != nil {
+	if err := cmdInitFromDB(configPath, outDir, dbDSN, adminPassword, force, updateMode); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
@@ -193,7 +202,7 @@ func cmdInit() {
 // and rewrites the file; --dry-run shows what --fix would apply without
 // writing.
 func cmdValidate() {
-	configPath, _, _, _, _, verbose, _ := parseGlobalFlags()
+	configPath, _, _, _, _, verbose, _, _ := parseGlobalFlags()
 	fix, dryRun := wantFixFlags()
 
 	if fix || dryRun {
@@ -254,7 +263,7 @@ func cmdValidate() {
 // build; failure there is reported as a warning instead of being fatal, since
 // the user can re-run it manually.
 func cmdGenerate() {
-	configPath, outDir, _, _, _, verbose, skipPlugins := parseGlobalFlags()
+	configPath, outDir, _, _, _, verbose, skipPlugins, _ := parseGlobalFlags()
 
 	cfg, err := parser.ParseFile(configPath)
 	if err != nil {

@@ -133,16 +133,25 @@ yaga version        Print version information
 | `--force` | `-f` | false | Overwrite existing files |
 | `--verbose` | `-v` | false | Verbose logging |
 | `--skip-plugins` | `-s` | false | Skip loading declared plugins (for `generate`) |
+| `--update` | — | false | Merge new tables into existing config instead of overwriting (`init` only) |
 
 ### `yaga init`
 
 ```sh
 yaga init --db "postgres://user:pass@localhost:5432/mydb" [--config yaga.yaml] [--force] [--admin-password PASSWORD]
+yaga init --db "postgres://user:pass@localhost:5432/mydb" --update               # Merge new tables into existing config
 ```
 
 The **only** way to scaffold a project. Connects to the database, introspects its schema,
 creates the `users`/`roles` auth tables and an `admin@…` user when they are missing, and
 writes `yaga.yaml` containing one resource per table plus the captured `schema:` block.
+
+**Update mode** (`--update`): Merges newly discovered tables into an existing `yaga.yaml`
+instead of overwriting it. All user customisations (custom column labels, actions,
+computed fields, navigation, pages, etc.) are preserved. The `schema:` block is fully
+replaced (it remains the sole source of truth). Resources whose tables no longer exist
+in the database are marked with an `# ORPHANED` comment but kept for manual review.
+Navigation and pages are never auto-modified.
 
 ### `yaga edit` / `yaga wedit`
 
@@ -175,6 +184,10 @@ writes `yaga.yaml` containing one resource per table plus the captured `schema:`
 [1. database design] → [2. init --db] → [3. edit yaga.yaml] → [4. generate]
         → [5. build] → [6. run and test] → [repeat from 3. to fix/enhance]
 ```
+
+**Schema evolution**: After adding tables to your database, run `yaga init --db DSN --update`
+to merge new tables into your existing `yaga.yaml` without losing customisations.
+Then continue the cycle from step 3.
 
 ### 3.1 Database design — the foundation
 

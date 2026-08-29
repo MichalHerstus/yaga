@@ -57,6 +57,8 @@ generation time. The generated app never runs sqlc; `admin/sql/` is not produced
 
 `yaga init --db {connection_string}` connects to an existing database, introspects its schema (tables, columns, primary keys, foreign keys), and generates `yaga.yaml` with a captured `schema:` block from the discovered tables. Works for SQLite, Postgres and MSSQL (MSSQL DSN prefix `sqlserver://` or `mssql://`; see "MSSQL-specific gotchas" below).
 
+**Update mode (`--update`):** Merges newly discovered tables into an existing `yaga.yaml` instead of overwriting it. All user customisations (custom column labels, actions, computed fields, navigation, pages, etc.) are preserved. The `schema:` block is fully replaced (it remains the sole source of truth). Resources whose tables no longer exist in the database are marked with an `# ORPHANED` comment but kept for manual review. Navigation and pages are never auto-modified.
+
 **Driver detection:** DSN prefix `postgres://` or `postgresql://` → postgres; everything else (file path, `:memory:`) → sqlite. Uses `github.com/jackc/pgx/v5/stdlib` for postgres and `modernc.org/sqlite` for sqlite.
 
 **What it does:**
@@ -72,7 +74,7 @@ generation time. The generated app never runs sqlc; `admin/sql/` is not produced
 
 **Auth table DDL:** Postgres uses `SERIAL`/`TIMESTAMPTZ`; SQLite uses `INTEGER PRIMARY KEY AUTOINCREMENT`/`datetime('now')`.
 
-Flags: `init --db <dsn> --config <yaml> --out <dir> --force` (short variants `-d`, `-c`, `-o`, `-f`).
+Flags: `init --db <dsn> --config <yaml> --out <dir> --force --update` (short variants `-d`, `-c`, `-o`, `-f`).
 
 ### `edit` — Interactive YAML config editor
 

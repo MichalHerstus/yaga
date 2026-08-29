@@ -21,7 +21,7 @@ import (
 // loads the config via the shared --config flag, and runs the editor server
 // until interrupted.
 func cmdWedit() {
-	configPath, _, _, _, _, _, _ := parseGlobalFlags()
+	configPath, _, _, _, _, _, _, _ := parseGlobalFlags()
 	port, open := parseWeditFlags(os.Args[2:])
 
 	cfg, err := parser.ParseFile(configPath)
