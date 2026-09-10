@@ -26,7 +26,7 @@ import (
 // which deployments can edit. Returns an error if the file cannot be written.
 func (g *Generator) generateMain() error {
 	driverName := "postgres"
-	driverImport := fmt.Sprintf("_ %q", g.moduleImport(g.Config.SQLC.OutputPkg))
+	driverImport := fmt.Sprintf("_ %q", g.moduleImport("internal/data"))
 	if g.isSQLite() {
 		driverName = "sqlite3"
 		driverImport = `_ "github.com/mattn/go-sqlite3"`

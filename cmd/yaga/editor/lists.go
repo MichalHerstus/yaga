@@ -28,8 +28,10 @@ func (e *Editor) recordList(name string, spec listSpec) *tview.List {
 	list.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		switch event.Rune() {
 		case 'a', 'A':
-			spec.add()
-			e.refreshList(name, spec)
+			if spec.add != nil {
+				spec.add()
+				e.refreshList(name, spec)
+			}
 			return nil
 		case 'd', 'D':
 			e.confirm(fmt.Sprintf("Delete selected %s?", spec.title), "This cannot be undone.", func() {

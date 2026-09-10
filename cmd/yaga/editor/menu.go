@@ -86,20 +86,12 @@ func (e *Editor) connectionsPage() tview.Primitive {
 			c := e.cfg.Connections[n]
 			return fmt.Sprintf("%s  %s", c.Driver, c.DSN)
 		},
-		add: func() {
-			e.namePrompt("New connection", "name", names, func(name string) {
-				e.cfg.Connections[name] = types.Connection{Driver: "postgres"}
-				e.markModified()
-			})
-		},
+		add: nil,
 		edit: func(i int) {
 			n := names()[i]
 			e.showPage("Connections/"+n, e.connectionPage(n))
 		},
-		remove: func(i int) {
-			delete(e.cfg.Connections, names()[i])
-			e.markModified()
-		},
+		remove: nil,
 	}
 	return e.recordList("Connections", spec)
 }
@@ -130,9 +122,6 @@ func (e *Editor) authPage() tview.Primitive {
 		e.pick(f, "Provider", authProviderOptions, a.Provider, func(v string) { a.Provider = v })
 		e.str(f, "Table", a.Table, func(v string) { a.Table = v })
 		e.str(f, "Login redirect", a.Login.Redirect, func(v string) { a.Login.Redirect = v })
-		e.yesno(f, "Registration", a.Registration, func(v bool) { a.Registration = v })
-		e.yesno(f, "Password reset", a.PasswordReset, func(v bool) { a.PasswordReset = v })
-		e.yesno(f, "Remember me", a.RememberMe, func(v bool) { a.RememberMe = v })
 		e.addButton(f, "Login fields", func() {
 			e.showPage("Auth/Login Fields", e.tagsPage("Auth/Login Fields", "Auth / Login fields", loginFieldOptions, func() []string {
 				return a.Login.Fields

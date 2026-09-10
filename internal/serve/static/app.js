@@ -837,13 +837,6 @@ function pageConnections() {
     const spacer = document.createElement("div");
     spacer.className = "spacer";
     head.appendChild(spacer);
-    const del = btn("Delete", "danger small");
-    del.addEventListener("click", () => confirmModal(`Delete connection "${name}"?`, () => {
-      delete c.connections[name];
-      markDirty();
-      pageConnections();
-    }));
-    head.appendChild(del);
     card.appendChild(head);
 
     const g = gridWrap(card);
@@ -854,14 +847,7 @@ function pageConnections() {
     numField(g, "Max idle", conn.pool, "max_idle");
     textField(g, "Conn lifetime (e.g. 30m)", conn.pool, "lifetime");
   }
-  const add = btn("+ Add connection", "primary");
-  add.addEventListener("click", () => inputModal("Add connection", "Connection name (unique key, e.g. primary)", "", (name) => {
-    if (c.connections[name]) { toast("Connection already exists: " + name, "error"); return; }
-    c.connections[name] = { driver: "postgres", dsn: "" };
-    markDirty();
-    pageConnections();
-  }));
-  root.appendChild(add);
+
 }
 
 /* ---------- page: Auth ---------- */
@@ -877,10 +863,6 @@ function pageAuth() {
   textField(g, "Auth table", a, "table");
   stringListField(g, "Login fields", a.login, "fields");
   textField(g, "Login redirect", a.login, "redirect");
-  boolField(g, "Registration", a, "registration");
-  boolField(g, "Password reset", a, "password_reset");
-  boolField(g, "Remember me", a, "remember_me");
-
   if (!a.login.rate_limit) a.login.rate_limit = {};
   h3(root, "Login rate limit");
   const card2 = cardEl(root);

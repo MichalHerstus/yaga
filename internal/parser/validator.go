@@ -97,18 +97,6 @@ func ValidateAll(cfg *types.Config) []error {
 		add(warn("panel.layout.max_content_width %q is not a supported width, falling back to \"none\"", cfg.Panel.Layout.MaxContentWidth))
 		cfg.Panel.Layout.MaxContentWidth = "none"
 	}
-	if cfg.SQLC.Config == "" {
-		cfg.SQLC.Config = "sqlc.yaml"
-	}
-	if cfg.SQLC.QueriesDir == "" {
-		cfg.SQLC.QueriesDir = "./sql/queries"
-	}
-	if cfg.SQLC.SchemaDir == "" {
-		cfg.SQLC.SchemaDir = "./sql/migrations"
-	}
-	if cfg.SQLC.OutputPkg == "" {
-		cfg.SQLC.OutputPkg = "internal/data"
-	}
 	if len(cfg.Resources) == 0 && len(cfg.Pages) == 0 {
 		add(fmt.Errorf("at least one resource or page is required"))
 	}
