@@ -351,7 +351,7 @@ auth:
       window_seconds: 300
 ```
 
-The login handler reads the identity field and the password field from the POST form, verifies the password against a bcrypt hash in `auth.table`, sets a `gorilla/sessions` cookie, and redirects to `login.redirect`. Unauthenticated users hitting a protected route are redirected to `<panel.path>/login`. `auth.guard`/`auth.provider`/`registration`/`password_reset`/`remember_me` are parsed but not yet used.
+The login handler reads the identity field and the password field from the POST form, verifies the password against a bcrypt hash in `auth.table`, sets a `gorilla/sessions` cookie, and redirects to `login.redirect`. Unauthenticated users hitting a protected route are redirected to `<panel.path>/login`. `auth.guard`/`auth.provider` are parsed but not yet used; `registration`/`password_reset`/`remember_me` are config-only flags (parsed, not implemented in the generated app).
 
 ### Navigation
 

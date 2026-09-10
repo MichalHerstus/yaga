@@ -47,7 +47,7 @@ go build -o yaga ./cmd/yaga
 Verify the installation:
 
 ```sh
-yaga version          # e.g. yaga version 2.1.0
+yaga version          # e.g. yaga version 2.1.5
 yaga                  # prints the usage text
 ```
 
@@ -55,11 +55,11 @@ yaga                  # prints the usage text
 
 Ready-to-run binaries for the common OS/arch combinations are published on the project's
 [GitHub Releases](https://github.com/MichalHerstus/yaga/releases) page. Download the
-archive matching your platform (e.g. `yaga_2.1.0_darwin_arm64.tar.gz`), extract it and
+archive matching your platform (e.g. `yaga_2.1.5_darwin_arm64.tar.gz`), extract it and
 place the `yaga` binary somewhere on your `PATH`:
 
 ```sh
-tar xzf yaga_2.1.0_darwin_arm64.tar.gz
+tar xzf yaga_2.1.5_darwin_arm64.tar.gz
 sudo mv yaga /usr/local/bin/
 yaga version
 ```
