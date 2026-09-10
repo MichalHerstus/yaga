@@ -1,41 +1,41 @@
-# YAGA — uživatelská příručka
+# YAGA — Uživatelská příručka
 
-**YAGA** (YAML Advanced Generator for Admin panels) je generátor CRUD webových aplikací (admin panelů) založený na YAML
-definičním souboru. YAGA vygeneruje kompletní kód aplikace, který už stačí jen zkompilovat. Stačí YAGA "nasměrovat" na existující databázi, popsat požadovaný detaily aplikace
-v souboru `yaga.yaml` a nástroj vytvoří kompletní, samostatný administrátorský panel v jazyce Go: CRUD
-zdroje, zobrazení typu karet/kanban, vlastní stránky s widgety, vyhledávání/třídění/filtrování, import/export do formátu CSV
-import/export, autentizace, RBAC, auditní protokolování, vlastní akce, háčky před/po
+**YAGA** (YAML Advanced Generator for Admin panels) je generátor administračních panelů
+pro Go, řízený YAML souborem. Nasměrujete ho na existující databázi, popíšete požadovaný
+dashboard v `yaga.yaml` a nástroj vygeneruje kompletní, samostatný administrátorský panel:
+CRUD zdroje, zobrazení karet/kanban, vlastní stránky s widgety, vyhledávání/řazení/filtrování,
+import/export CSV, autentizaci, RBAC, auditní protokolování, vlastní akce, háčky before/after
 (Go, SQL nebo Lua) a další.
 
-Důležité: **databáze je základem**. YAGA se připojí k vaší databázi,
-přečte schéma, včetně PK/FK a views a uloží tyto informace do **specifikačního YAML souboru**, který je možné dále editovat a měnit tak vzhled a chování výsledné aplikace. Proto je nutné návrhu databáze a odladění věnovat náležitý čas a pozornost! YAGA ovšem není obecným nástrojem na tvorbu libovolných web aplikací jako jsou lowcode mendix, Bubble.io, AppSmith apod. Lze v něm realizovat jen a pouze aplikaci typu "admin dashboard", viz. obrazovky v adresáři /screens/
+Důležitý mentální model: **databáze je základ**! YAGA introspektuje vaši databázi,
+zachytí její schéma a přidává chování **navrch** — nenahrazuje dobrý návrh databáze.
 
 ---
 
 ## 1. Instalace
 
-### 1.1 Předpoklady
+### 1.1 Předpoklady — funkční Go toolchain
 
-| Tool | Required for | Notes |
+| Nástroj | Potřebný pro | Poznámky |
 |---|---|---|
-| [Go](https://go.dev/dl/) 1.26+ | Running yaga **and** building the generated dashboard | Non-negotiable; see 1.4 |
-| [Templ](https://templ.dev/) | Compiling `.templ` views in the generated app | Optional to install manually — the generated `go.mod` declares `tool github.com/a-h/templ/cmd/templ`, so `go tool templ generate` works through the Go toolchain |
+| [Go](https://go.dev/dl/) 1.26+ | Spuštění yaga **i** sestavení vygenerovaného dashboardu | Nutná podmínka; viz 1.4 |
+| [Templ](https://templ.dev/) | Kompilace `.templ` šablon ve vygenerované aplikaci | Instalace ručně je volitelná — vygenerovaný `go.mod` deklaruje `tool github.com/a-h/templ/cmd/templ`, takže `go tool templ generate` funguje přes Go toolchain |
 
-No Node.js/npm, no sqlc, and no Tailwind binary are needed. The Tailwind stylesheet is
-pre-built and vendored into the generated project, and Chart.js is embedded into the yaga
-binary — the running dashboard needs **no internet at runtime**.
+Není potřeba Node.js/npm, sqlc ani binární soubor Tailwind. Tailwind stylesheet je
+předem sestavený a uložený ve vygenerovaném projektu a Chart.js je zabudovaný do binárního
+souboru yaga — běžící dashboard **nepotřebuje internet za běhu**.
 
-### 1.2 Install from source
+### 1.2 Instalace ze zdrojových kódů
 
-The simplest installation:
+Nejjednodušší instalace:
 
 ```sh
 go install github.com/MichalHerstus/yaga/cmd/yaga@latest
 ```
 
-The binary lands in `$(go env GOPATH)/bin/yaga` (commonly `~/go/bin/yaga`); make sure
-that directory is on your `PATH` (or set `GOBIN` before installing). To build from a
-local checkout instead:
+Binární soubor se umístí do `$(go env GOPATH)/bin/yaga` (obvykle `~/go/bin/yaga`); ujistěte se,
+že je tento adresář na vašem `PATH` (nebo nastavte `GOBIN` před instalací). Pro sestavení
+z místní kopie:
 
 ```sh
 git clone https://github.com/MichalHerstus/yaga.git
@@ -43,19 +43,19 @@ cd yaga
 go build -o yaga ./cmd/yaga
 ```
 
-Verify the installation:
+Ověření instalace:
 
 ```sh
-yaga version          # e.g. yaga version 2.1.5
-yaga                  # prints the usage text
+yaga version          # např. yaga version 2.1.5
+# vypíše text s použitím
 ```
 
-### 1.3 Pre-built binaries (GitHub Releases)
+### 1.3 Předem sestavené binární soubory (GitHub Releases)
 
-Ready-to-run binaries for the common OS/arch combinations are published on the project's
-[GitHub Releases](https://github.com/MichalHerstus/yaga/releases) page. Download the
-archive matching your platform (e.g. `yaga_2.1.5_darwin_arm64.tar.gz`), extract it and
-place the `yaga` binary somewhere on your `PATH`:
+Hotové binární soubory pro běžné kombinace OS/arch jsou publikovány na stránce
+[GitHub Releases](https://github.com/MichalHerstus/yaga/releases) projektu. Stáhněte
+archiv odpovídající vaší platformě (např. `yaga_2.1.5_darwin_arm64.tar.gz`), rozbalte ho a
+umístěte binární soubor `yaga` někam na svůj `PATH`:
 
 ```sh
 tar xzf yaga_2.1.5_darwin_arm64.tar.gz
@@ -63,158 +63,158 @@ sudo mv yaga /usr/local/bin/
 yaga version
 ```
 
-> **A working Go installation is still required — even when you use a pre-built yaga
-> binary.** yaga only *generates* the admin panel; it does not ship a compiler. Building
-> the generated dashboard always runs Go tools against the generated project:
-> `go mod tidy`, `go tool templ generate` and `go build ./...`. If you cannot install Go
-> on the machine, use `yaga generate` on a machine that has Go and transfer the built
-> **binary** (not the source) to the target — `make package` builds exactly that
-> deployment archive for you.
+> **Funkční instalace Go je stále povinná — i když používáte předem sestavený binární
+> soubor yaga.** yaga pouze *generuje* admin panel; neobsahuje překladač. Sestavení
+> vygenerovaného dashboardu vždy spouští nástroje Go proti vygenerovanému projektu:
+> `go mod tidy`, `go tool templ generate` a `go build ./...`. Pokud nemůžete nainstalovat Go
+> na cílový stroj, použijte `yaga generate` na stroji s Go a přeneste **binární soubor**
+> (ne zdrojové kódy) na cíl — `make package` sestaví přesně takový
+> instalační archiv.
 
-### 1.4 DSN configuration (how the dashboard finds its database)
+### 1.4 Konfigurace DSN (jak dashboard najde svou databázi)
 
-The generated dashboard resolves its database DSN at startup, in this order:
+Vygenerovaný dashboard řeší DSN své databáze při spuštění v tomto pořadí:
 
-1. **`DATABASE_URL` environment variable** — wins over everything. Ideal for CI/CD and
-   shell-level overrides.
-2. **`.ENV` file** next to the dashboard binary — generated into the project folder by
-   `yaga generate` (mode 0600, owner-readable only), containing `DATABASE_URL=<dsn>`.
-   Edit it to point at a different database (e.g. switching from a test to a production
-   database) without rebuilding.
-3. **Non-secret localhost fallback** — only used when the config declared *no* connection
-   at all (a config that does declare one refuses to start when no DSN is found).
+1. **Proměnná prostředí `DATABASE_URL`** — má přednost před vším. Ideální pro CI/CD a
+   přepisy na úrovni shellu.
+2. **Soubor `.ENV`** vedle binárního souboru dashboardu — generovaný do složky projektu
+   příkazem `yaga generate` (mód 0600, čitelný pouze vlastníkem), obsahující
+   `DATABASE_URL=<dsn>`. Upravte ho pro přesměrování na jinou databázi (např. přepnutí
+   z testovací na produkční databázi) bez překladu.
+3. **Nedůvěryhodný localhost fallback** — použije se pouze tehdy, když konfigurace
+   *nemá* žádné připojení (konfigurace s připojením odmítne spuštění, pokud DSN není nalezena).
 
 ```ini
-# generated admin/.ENV  (0600)
-# The DATABASE_URL environment variable overrides this value at runtime.
+# vygenerovaný admin/.ENV  (0600)
+# Proměnná prostředí DATABASE_URL přepíše tuto hodnotu za běhu.
 DATABASE_URL=postgres://user:pass@localhost:5432/mydb?sslmode=disable
 ```
 
-Examples for the other drivers:
+Příklady pro ostatní ovladače:
 
 ```sh
-DATABASE_URL="file:./data/admin.db" ./admin                    # SQLite (relative path!)
+DATABASE_URL="file:./data/admin.db" ./admin                    # SQLite (relativní cesta!)
 DATABASE_URL="sqlserver://user:pass@localhost:1433?database=mydb" ./admin   # MSSQL
 ```
 
-Notes:
+Poznámky:
 
-- The DSN is **never** compiled into the dashboard binary — secrets stay out of the
-  artifact. The source `yaga.yaml` still holds the plaintext `dsn:` under `connections:`
-  (it drives generation), so treat `yaga.yaml` as sensitive.
-- **`yaga generate` rewrites `.ENV`** from the config on every run. For deployment
-  environments, edit `.ENV` (or set `DATABASE_URL`) *after* generating / packaging —
-  `make package` includes `.ENV` in the release archive.
-- The generated server runs a DB sanity query **before binding the port**, so a
-  missing/uninitialised database is a fatal startup error instead of an occupied port.
+- DSN je **nikdy** nekompilována do binárního souboru dashboardu — tajemství zůstávají mimo
+  artefakt. Zdrojový `yaga.yaml` stále obsahuje plaintextový `dsn:` v `connections:`
+  (řídí generování), proto považujte `yaga.yaml` za citlivý soubor.
+- **`yaga generate` přepisuje `.ENV`** z konfigurace při každém spuštění. Pro prostředí
+  nasazení upravte `.ENV` (nebo nastavte `DATABASE_URL`) *po* generování / balení —
+  `make package` zahrnuje `.ENV` do release archivu.
+- Vygenerovaný server spouští sanity dotaz na DB **před navázáním portu**, takže
+  chybějící/inicializovaná databázie je fatální chyba při spuštění místo obsazeného portu.
 
 ---
 
-## 2. Commands and flags summary
+## 2. Přehled příkazů a přepínačů
 
 ```
-yaga init --db DSN  Introspect an existing database and generate yaga.yaml
-yaga edit           Interactive YAML config editor (TUI)
-yaga wedit          Web-based YAML config editor (browser, local HTTP server)
-yaga generate       Generate the admin panel Go application (offline, no sqlc)
-yaga validate       Validate the YAML configuration
-yaga version        Print version information
+yaga init --db DSN  Introspektuje existující databázi a vygeneruje yaga.yaml
+yaga edit           Interaktivní editor YAML konfigurace (TUI)
+yaga wedit          Webový editor YAML konfigurace (prohlížeč, lokální HTTP server)
+yaga generate       Vygeneruje Go aplikaci admin panelu (offline, bez sqlc)
+yaga validate       Ověří YAML konfiguraci
+yaga version        Vypíše informace o verzi
 ```
 
-### Global flags (usable with most commands)
+### Globální přepínače (použitelné s většinou příkazů)
 
-| Flag | Short | Default | Meaning |
+| Přepínač | Zkratka | Výchozí | Význam |
 |---|---|---|---|
-| `--config` | `-c` | `yaga.yaml` | Path to the YAML config file |
-| `--out` | `-o` | `./admin` | Output directory for generated code |
-| `--db` | `-d` | — | DB connection string for `init` (`postgres://…`, `sqlserver://…`, `mssql://…`, or a sqlite file path) |
-| `--admin-password` | `-p` | random | Initial admin password for `init --db` scaffolding |
-| `--force` | `-f` | false | Overwrite existing files |
-| `--verbose` | `-v` | false | Verbose logging |
-| `--skip-plugins` | `-s` | false | Skip loading declared plugins (for `generate`) |
-| `--update` | — | false | Merge new tables into existing config instead of overwriting (`init` only) |
+| `--config` | `-c` | `yaga.yaml` | Cesta k YAML konfiguračnímu souboru |
+| `--out` | `-o` | `./admin` | Výstupní adresář pro generovaný kód |
+| `--db` | `-d` | — | Připojovací řetězec DB pro `init` (`postgres://…`, `sqlserver://…`, `mssql://…` nebo cesta k sqlite souboru) |
+| `--admin-password` | `-p` | náhodné | Počáteční heslo administrátora pro `init --db` scaffolding |
+| `--force` | `-f` | false | Přepsat existující soubory |
+| `--verbose` | `-v` | false | Podrobný logování |
+| `--skip-plugins` | `-s` | false | Přeskočit načítání deklarovaných pluginů (pro `generate`) |
+| `--update` | — | false | Sloučit nové tabulky do existující konfigurace místo přepisu (`init`) |
 
 ### `yaga init`
 
 ```sh
-yaga init --db "postgres://user:pass@localhost:5432/mydb" [--config yaga.yaml] [--force] [--admin-password PASSWORD]
-yaga init --db "postgres://user:pass@localhost:5432/mydb" --update               # Merge new tables into existing config
+yaga init --db "postgres://user:pass@localhost:5432/mydb" [--config yaga.yaml] [--force] [--admin-password HESLO]
+yaga init --db "postgres://user:pass@localhost:5432/mydb" --update               # Sloučit nové tabulky do existující konfigurace
 ```
 
-The **only** way to scaffold a project. Connects to the database, introspects its schema,
-creates the `users`/`roles` auth tables and an `admin@…` user when they are missing, and
-writes `yaga.yaml` containing one resource per table plus the captured `schema:` block.
+**Jediný** způsob, jak vytvořit kostru projektu. Připojí se k databázi, introspektuje schéma,
+vytvoří auth tabulky `users`/`roles` s výchozími rolemi **a** uživatele admina, pokud
+chybí, a zapíše `yaga.yaml` obsahující jeden zdroj na tabulku plus zachycený blok `schema:`.
 
-**Update mode** (`--update`): Merges newly discovered tables into an existing `yaga.yaml`
-instead of overwriting it. All user customisations (custom column labels, actions,
-computed fields, navigation, pages, etc.) are preserved. The `schema:` block is fully
-replaced (it remains the sole source of truth). Resources whose tables no longer exist
-in the database are marked with an `# ORPHANED` comment but kept for manual review.
-Navigation and pages are never auto-modified.
+**Režim aktualizace** (`--update`): Sloučí nově objevené tabulky do existujícího `yaga.yaml`
+místo přepisu. Všechna uživatelská přizpůsobení (vlastní popisky sloupců, akce,
+vypočítaná pole, navigace, stránky atd.) jsou zachována. Blok `schema:` je plně
+nahrazen (zůstává jediným zdrojem pravdy). Zdroje, jejichž tabulky již v databázi
+neexistují, jsou označeny komentářem `# ORPHANED` ale ponechány pro ruční kontrolu.
+Navigace a stránky nejsou nikdy automaticky upravovány.
 
 ### `yaga edit` / `yaga wedit`
 
-| Flag | Meaning |
+| Přepínač | Význam |
 |---|---|
-| `--prompt TEXT` | Edit the config via AI instead of the TUI (`file://PATH` reads the prompt from a file, `~` expands) |
-| `--apikey KEY` | OpenRouter API key (falls back to `OPENROUTER_API_KEY` env, then `.ENV`) |
-| `--model MODEL` | Model id (falls back to `.ENV`, else `openrouter/auto`); `"lmstudio"` uses a local LM Studio server without a key |
-| `--dry-run` | (with `--prompt`) print the proposed YAML + diff without writing |
+| `--prompt TEXT` | Upravit konfiguraci přes AI místo TUI (`file://PATH` přečte prompt ze souboru, `~` se rozbalí) |
+| `--apikey KEY` | OpenRouter API klíč (fallback na `OPENROUTER_API_KEY` env, pak `.ENV`) |
+| `--model MODEL` | ID modelu (fallback na `.ENV`, jinak `openrouter/auto`); `"lmstudio"` použije lokální LM Studio server bez klíče |
+| `--dry-run` | (s `--prompt`) vypíše navržený YAML + diff bez zápisu |
 
-`wedit` additionally accepts:
+`wedit` navíc přijímá:
 
-| Flag | Meaning |
+| Přepínač | Význam |
 |---|---|
-| `--port N` | Web editor listen port (default `9090`) |
-| `--open` | Open the editor in the default browser after binding |
+| `--port N` | Port webového editoru (výchozí `9090`) |
+| `--open` | Otevře editor ve výchozím prohlížeči po navázání |
 
 ### `yaga validate`
 
-| Flag | Meaning |
+| Přepínač | Význam |
 |---|---|
-| `--fix` | Auto-repair known-fixable problems (e.g. an inert list/card filter block) and rewrite the config (backup at `<config>.bak`) |
-| `--dry-run` | Show what `--fix` would apply without writing anything |
+| `--fix` | Automaticky opraví známé opravitelné problémy (např. inertní blok list/card filter) a přepíše konfiguraci (záloha v `<config>.bak`) |
+| `--dry-run` | Zobrazí, co by `--fix` aplikoval, bez zápisu čehokoli |
 
 ---
 
-## 3. Usage workflow
+## 3. Pracovní postup
 
 ```
-[1. database design] → [2. init --db] → [3. edit yaga.yaml] → [4. generate]
-        → [5. build] → [6. run and test] → [repeat from 3. to fix/enhance]
+[1. návrh databáze] → [2. init --db] → [3. úprava yaga.yaml] → [4. generate]
+        → [5. build] → [6. spuštění a testování] → [opakování od 3. k opravě/vylepšení]
 ```
 
-**Schema evolution**: After adding tables to your database, run `yaga init --db DSN --update`
-to merge new tables into your existing `yaga.yaml` without losing customisations.
-Then continue the cycle from step 3.
+**Vývoj schématu**: Po přidání tabulek do databáze spusťte `yaga init --db DSN --update`
+pro sloučení nových tabulek do existujícího `yaga.yaml` bez ztráty přizpůsobení.
+Poté pokračujte cyklem od kroku 3.
 
-### 3.1 Database design — the foundation
+### 3.1 Návrh databáze — základ
 
-yaga is **schema-driven**: the database is the base, and yaga layers the admin behaviour
-on top of it. A well-designed database produces a well-behaved admin panel almost for free.
+yaga je **řízený schématem**: databáze je základ a yaga vrství administrační chování
+navrch. Dobře navržená databáze produkuje dobře fungující admin panel téměř zdarma.
 
-Things that matter for your design:
+Věci, které při návrhu záleží:
 
-- **Foreign keys are the wiring.** yaga introspects every FK and uses it to:
-  - render `relation` fields / modal **record pickers** (options derived from the FK's
-    label column),
-  - show the related record's label instead of a raw id in lists and details (via
-    `LEFT JOIN`),
-  - generate **master–detail children** (`children:` blocks) automatically.
-  - Declare `options_value`/`options_label` and the picker works without any custom SQL.
-- **Database views** can be browsed like tables. The introspection marks them
-  `view: true` in the captured `schema:` block, and generated resources for views are
-  read-only (no create/update/delete).
-- **Stored procedures** can be called from the dashboard. An `action` (or a hook) can
-  invoke a procedure with `proc: <name>` — `CALL` on Postgres, `EXEC` on MSSQL, and for
-  SQLite (which has no real procedures) the config's `procedures:` block provides named
-  SQL batches executed inside one transaction.
-- Keep a **primary key** on every table (single-column is easiest), choose a stable
-  natural `label` column for the "name of a row" (yaga prefers `name`, then `title`,
-  then `label`, then the first non-PK text column), and prefer `varchar`/`text` types that
-  map cleanly (see the type mapping in the Schema section).
+- **Cizí klíče jsou zapojení.** yaga introspektuje každý FK a používá ho pro:
+  - vykreslení polí `relation` / modálních **record pickerů** (volby odvozené z
+    label sloupce FK),
+  - zobrazení labelu souvisejícího záznamu místo surového id v seznamech a detailech
+    (přes `LEFT JOIN`),
+  - automatické generování **master–detail children** (`children:` bloky).
+  - Deklarujte `options_value`/`options_label` a picker funguje bez vlastního SQL.
+- **Databázové pohledy** lze procházet jako tabulky. Introspektace je označí
+  `view: true` v zachyceném bloku `schema:` a vygenerované zdroje pro pohledy jsou
+  pouze pro čtení (bez create/update/delete).
+- **Uložené procedury** lze volat z dashboardu. `action` (nebo hook) může
+  zavolat proceduru pomocí `proc: <name>` — `CALL` na Postgres, `EXEC` na MSSQL a pro
+  SQLite (který nemá skutečné procedury) blok `procedures:` v konfiguraci poskytuje
+  pojmenované SQL dávky spouštěné uvnitř jedné transakce.
+- Mějte **primární klíč** na každé tabulce (jednosloupcový je nejjednodušší), zvolte stabilní
+  přirozený sloupec `label` pro "název řádku" (yaga upřednostňuje `name`, pak `title`,
+  pak `label`, pak první textový sloupec mimo PK) a upřednostňujte typy `varchar`/`text`,
+  které se čistě mapují (viz mapování typů v sekci Schéma).
 
-### 3.2 `init --db` — scaffold from the database
+### 3.2 `init --db` — kostra z databáze
 
 ```sh
 yaga init --db "postgres://user:pass@localhost:5432/mydb?sslmode=disable"
@@ -222,56 +222,56 @@ yaga init --db "./mydata.db"                                            # SQLite
 yaga init --db "sqlserver://user:pass@localhost:1433?database=mydb"     # MSSQL
 ```
 
-What happens:
+Co se stane:
 
-1. Connects to the database and introspects tables, columns, primary keys and foreign keys.
-2. Creates the `users`/`roles` auth tables with default roles **and** an admin user when
-   they are missing — login `admin@admin.test` / the generated password printed to the
-   console (or `--admin-password`).
-3. Writes `yaga.yaml`: a resource per table (list/detail/form sections, FK fields with
-   pickers), the `auth:` block, one connection, and — critically — the captured
-   **`schema:` block**, the **sole schema source** for generation.
+1. Připojí se k databázi a introspektuje tabulky, sloupce, primární a cizí klíče.
+2. Vytvoří auth tabulky `users`/`roles` s výchozími rolemi **a** uživatelem admina, pokud
+   chybí — přihlašovací jméno `admin@admin.test` / vygenerované heslo vypsané do
+   konzole (nebo `--admin-password`).
+3. Zapíše `yaga.yaml`: jeden zdroj na tabulku (oddíly list/detail/form, pole FK s
+   pickery), blok `auth:`, jedno připojení a — co je nejdůležitější — zachycený
+   **blok `schema:`**, **jediný zdroj schématu** pro generování.
 
-The docs are written to disk; you then customise them before generating.
+Dokumenty se zapíší na disk; poté je přizpůsobíte před generováním.
 
-### 3.3 Edit the YAML spec
+### 3.3 Úprava YAML specifikace
 
-Pick one of the editors (detailed in Section 5):
-
-```bash
-yaga edit                 # terminal UI
-yaga wedit                # browser editor + live preview + MCP
-yaga edit --prompt "…"    # AI-assisted edit (experimental)
-```
-
-Typical things you tune after `init --db`:
-
-- `panel` branding/language, sidebar, theme;
-- which columns are `sortable` / `searchable`, column labels, default sort;
-- which fields appear on create/update forms, field visibility, required hints;
-- add views, filters, custom actions, hooks, children, policies, audit.
-
-### 3.4 Generate
+Vyberte jeden z editorů (podrobně popsán v sekci 5):
 
 ```bash
-yaga generate                     # writes ./admin (fully offline — no DB, no sqlc)
+yaga edit                 # terminálové UI
+yaga wedit                # webový editor + živý náhled + MCP
+yaga edit --prompt "…"    # AI podporovaná úprava (experimentální)
 ```
 
-The generator derives every query from the captured `schema:` block, emits the dashboard
-source, and vendors the pre-built stylesheet + Chart.js. `--force` refreshes an existing
-output. You can re-run this as often as you like — everything is regenerated from scratch.
+Typické věci, které upravíte po `init --db`:
 
-> The AI path and the `--prompt` flow also round-trip through `yaga generate` after
-> editing.
+- `panel` branding/jazyk, sidebar, téma;
+- které sloupce jsou `sortable` / `searchable`, popisky sloupců, výchozí řazení;
+- která pole se zobrazí na formulářích create/update, viditelnost polí, povinné náznaky;
+- přidání pohledů, filtrů, vlastních akcí, hooků, children, politik, auditu.
 
-### 3.5 Build
+### 3.4 Generování
+
+```bash
+yaga generate                     # zapíše ./admin (plně offline — bez DB, bez sqlc)
+```
+
+Generátor odvozuje každý dotaz z zachyceného bloku `schema:`, vypíše zdrojový kód
+dashboardu a přidá předem sestavený stylesheet + Chart.js. `--force` obnoví existující
+výstup. Můžete to spouštět znovu a znovu — vše se generuje od začátku.
+
+> AI cesta i tok `--prompt` také prochází přes `yaga generate` po
+> úpravě.
+
+### 3.5 Sestavení
 
 ```bash
 cd admin
 make build          # go mod tidy → go tool templ generate → go build
 ```
 
-or manually:
+nebo ručně:
 
 ```bash
 go mod tidy
@@ -279,98 +279,98 @@ go tool templ generate
 go build -o admin .
 ```
 
-### 3.6 Run and test
+### 3.6 Spuštění a testování
 
 ```bash
-make run                                # builds + runs, default port 8080
-./admin --port 8080 --log full          # short forms: -p 8080 -l err
-./admin -h                              # print all runtime flags
+make run                                # sestaví + spustí, výchozí port 8080
+./admin --port 8080 --log full          # krátké formy: -p 8080 -l err
+./admin -h                              # vypíše všechny přepínače běhu
 ```
 
-Then open `http://localhost:8080`, log in as the admin user, and exercise list/search/
-sort/filter, create/edit/delete, actions, pages and the cards view.
+Poté otevřete `http://localhost:8080`, přihlaste se jako administrátor a vyzkoušejte seznam/vyhledávání/
+řazení/filtrování, vytváření/upravování/mazání, akce, stránky a zobrazení karet.
 
-### 3.7 Repeat from the YAML
+### 3.7 Opakování z YAML
 
-Config change → `yaga generate` → `make build` → test. The loop between steps 3–6 is
-where the product is shaped: labels, which columns appear, validation hints, actions,
-looks, hooks, audit — all driven from YAML, no hand-written UI code, no run-time bleeding.
+Změna konfigurace → `yaga generate` → `make build` → test. Smyčka mezi kroky 3–6 je
+místo, kde se tvaruje produkt: popisky, které sloupce se zobrazí, náznaky validace, akce,
+vzhled, hooky, audit — vše řízené z YAML, žádný ručně psaný UI kód, žádný únik do běhu.
 
 ---
 
-## 4. YAML blocks — what everything means
+## 4. YAML bloky — co znamená každá sekce
 
-The full schema is documented in `README.md`, the authoritative `SPEC.md`. Here is the
-map of the top-level blocks.
+Plné schéma je dokumentováno v `README.md`, autoritativním `SPEC.md`. Zde je
+mapa bloků nejvyšší úrovně.
 
-### Top-level keys
+### Klíče nejvyšší úrovně
 
-| Key | Required | Meaning |
+| Klíč | Povinný | Význam |
 |---|---|---|
-| `version` | yes | Schema version string, e.g. `"1"`. Any non-empty value is accepted. |
-| `panel` | yes | Panel identity, branding, layout and theme. |
-| `connections` | — | DB connections (driver + dsn). The **first** entry is used by the generated app. |
-| `schema` | — | The captured database schema — **the sole schema** source for generation (written by `init --db`, then hand-editable). |
-| `auth` | — | Login table, identity/password fields, redirect after login, optional rate limit. |
-| `navigation` | — | Sidebar groups + items. |
-| `resources` | — | CRUD entities. At least one resource or page is needed. |
-| `pages` | — | Custom dashboard pages with widgets. At least one resource or page is needed. |
-| `audit` | — | Audit log of every create/update/delete/action (adds an `AuditLog` resource). |
-| `procedures` | — | SQLite SQL-batch “stored procedures” (ignored on postgres/mssql). |
-| `plugins` | — | Generation-time plugins that contribute resources/pages/hooks. |
+| `version` | ano | Řetězec verze schématu, např. `"1"`. Jakákoli neprázdná hodnota je přijata. |
+| `panel` | ano | Identita panelu, branding, layout a téma. |
+| `connections` | — | Připojení k DB (driver + dsn). **První** záznam používá vygenerovaná aplikace. |
+| `schema` | — | Zachycené schéma databáze — **jediný zdroj schématu** pro generování (zapsáno pomocí `init --db`, pak ručně upravitelné). |
+| `auth` | — | Přihlašovací tabulka, pole identity/hesla, přesměrování po přihlášení, volitelný limit pokusů. |
+| `navigation` | — | Skupiny a položky bočního panelu. |
+| `resources` | — | CRUD entity. Alespoň jeden resource nebo stránka je povinná. |
+| `pages` | — | Vlastní stránky dashboardu s widgety. Alespoň jeden resource nebo stránka je povinná. |
+| `audit` | — | Auditní protokol každého create/update/delete/action (přidá resource `AuditLog`). |
+| `procedures` | — | SQLite SQL-dávkové "uložené procedury" (ignorováno na postgres/mssql). |
+| `plugins` | — | Pluginy při generování, které přispívají zdroji/stránkami/hooky. |
 
-### `panel` — identity and look
+### `panel` — identita a vzhled
 
 ```yaml
 panel:
-  id: admin            # lowercase; part of generated handler names (AdminDashboard)
-  path: /admin         # URL prefix, MUST start with "/" (base of all routes)
-  name: "My Admin"     # shown in the sidebar + login page
+  id: admin            # malá písmena; součást generovaných názvů handlerů (AdminDashboard)
+  path: /admin         # URL prefix, MUSÍ začínat "/" (základ všech rout)
+  name: "My Admin"     # zobrazeno v bočním panelu + přihlašovací stránce
   brand:
     logo: /assets/logo.svg
     colors: { primary: "#6366f1", secondary: "#64748b" }
   layout:
     sidebar: { collapsible: true, width: 280 }
     topbar:  { sticky: true }
-    max_content_width: 7xl          # validates against an allowlist
+    max_content_width: 7xl          # validuje proti seznamu povolených
   theme:
     dark_mode: true
     font: { family: "Inter, sans-serif", mono: "JetBrains Mono, monospace" }
 ```
 
-### `connections` — the dashboard’s database
+### `connections` — databáze dashboardu
 
 ```yaml
 connections:
   default:
-    driver: postgres          # postgres (default) | sqlite | sqlite3 | mssql | sqlserver
+    driver: postgres          # postgres (výchozí) | sqlite | sqlite3 | mssql | sqlserver
     dsn: "postgres://user:pass@localhost:5432/db?sslmode=disable"
     pool: { max_open: 25, max_idle: 10, lifetime: 5m }
 ```
 
-The driver determines `sql.Open`, the LIKE operator (`ILIKE` vs `LIKE`), placeholders
-(`$N` vs positional `?`), identifier quoting (`"name"` vs `[name]`) and id Go types
-(`int32` postgres/mssql, `int64` sqlite). The `dsn` is written to the project’s `.ENV`
-(see 1.4).
+Driver určuje `sql.Open`, operátor LIKE (`ILIKE` vs `LIKE`), zástupné znaky
+(`$N` vs pozicionální `?`), quoting identifikátorů (`"name"` vs `[name]`) a Go typy id
+(`int32` postgres/mssql, `int64` sqlite). Hodnota `dsn` se zapíše do `.ENV` projektu
+(viz 1.4).
 
-### `schema` — the captured database
+### `schema` — zachycená databáze
 
-Written by `init --db`; the generator trusts it entirely (offline). You can hand-edit it
-(add columns, adjust types) — `validate` and the editors warn/error when a resource
-references a table/column that is missing here.
+Zapsáno pomocí `init --db`; generátor mu plně důvěřuje (offline). Můžete ho upravovat
+ručně (přidávat sloupce, upravovat typy) — `validate` a editory varují/chybují, když
+resource odkazuje na tabulku/sloupec, který zde chybí.
 
-### `auth` — login
+### `auth` — přihlášení
 
 ```yaml
 auth:
-  table: users                     # login lookup table
+  table: users                     # tabulka pro vyhledávání při přihlášení
   login:
-    fields: [email, password]      # identity + password (bcrypt in DB)
-    redirect: /custom/dashboard    # where to go after login (a registered route)
+    fields: [email, password]      # identity + heslo (bcrypt v DB)
+    redirect: /custom/dashboard    # kam po přihlášení (zaregistrovaná ruta)
     rate_limit: { max_attempts: 5, window_seconds: 300 }
 ```
 
-### `navigation` — sidebar
+### `navigation` — boční panel
 
 ```yaml
 navigation:
@@ -385,23 +385,23 @@ navigation:
       - { type: link, label: "Google Analytics", url: https://analytics.google.com, opens_in_new_tab: true }
 ```
 
-Items link to a `resource` list, a `page` route, or an external `link`.
+Položky odkazují na seznam `resource`, rutu `page` nebo externí `link`.
 
-### `resources` — CRUD entities
+### `resources` — CRUD entity
 
 ```yaml
 resources:
-  - name: User            # REQUIRED PascalCase (lowercased → Go pkg/dir/URL: "user")
-    label: Users          # UI label; default = name
-    table: users          # optional DB table override (emitted by introspection)
-    id_column: id         # optional row-key override (e.g. "ID" on mssql)
-    id_type: int32        # optional id type override (e.g. int64 for bigint pks)
-    import_csv: true      # adds an "Import CSV" button + POST /import/csv
+  - name: User            # POVINNÉ PascalCase (zmenšené → Go pkg/dir/URL: "user")
+    label: Users          # UI label; výchozí = name
+    table: users          # volitelný přepis DB tabulky (generován introspektací)
+    id_column: id         # volitelný přepis row-key (např. "ID" na mssql)
+    id_type: int32        # volitelný přepis typu id (např. int64 pro bigint pk)
+    import_csv: true      # přidá tlačítko "Import CSV" + POST /import/csv
 ```
 
-Each resource has up to three views + extras:
+Každý resource má až tři pohledy + extras:
 
-#### `list` — table view
+#### `list` — tabulkový pohled
 
 ```yaml
     list:
@@ -411,32 +411,32 @@ Each resource has up to three views + extras:
         - { name: name,       type: string,  searchable: true }
         - { name: email,      type: email,   sortable: true }
         - { name: status,     type: badge,   options: { active: success, inactive: warning } }
-        - { name: role_label, label: Role,   type: text }   # FK label column (introspected)
-      default_sort: -created_at      # "-" prefix = descending
-      export: [id, name, email]     # optional CSV column subset
-      filter:                       # collapsible filter section
+        - { name: role_label, label: Role,   type: text }   # FK label sloupec (introspektovaný)
+      default_sort: -created_at      # prefix "-" = sestupně
+      export: [id, name, email]     # volitelný podmnožina sloupců CSV
+      filter:                       # sbalitelná sekce filtru
         label: "Status"
         where: "status = $1"
         params: [ { name: status, label: Status } ]
 ```
 
-Search, sort, filter and pagination are generated. `sortable`/`searchable` decide which
-columns react to the search box / sort header.
+Vyhledávání, řazení, filtrování a stránkování se generují. `sortable`/`searchable` určují,
+které sloupce reagují na vyhledávací pole / záhlaví řazení.
 
-#### `card` — grid / kanban view (optional)
+#### `card` — mřížkový / kanban pohled (volitelný)
 
 ```yaml
     card:
       fields:   [ { name: title }, { name: status, type: select, options: {todo: "To Do", doing: "In Progress"} } ]
-      columns: 3              # cards per row (1..12)
-      rows: 4                 # rows per page
-      kanban_field: status    # optional → kanban board grouped by option value
+      columns: 3              # karty na řádek (1..12)
+      rows: 4                 # řádků na stránku
+      kanban_field: status    # volitelné → kanban board seskupený podle hodnoty volby
       default_sort: -created_at
 ```
 
-View-only, served at `/cards`, reachable via a “Cards” button on the list.
+Pouze pro čtení, dostupný na `/cards`, dosažitelný přes tlačítko "Cards" v seznamu.
 
-#### `detail` — record view (optional)
+#### `detail` — pohled na záznam (volitelný)
 
 ```yaml
     detail:
@@ -446,7 +446,38 @@ View-only, served at `/cards`, reachable via a “Cards” button on the list.
         - { name: email, type: email }
 ```
 
-Rendered as a read-only record page; keyed by the resource’s row key.
+Vykreslí se jako stránka záznamu pouze pro čtení; klíčována podle row key resource.
+
+#### `computed:` — virtuální sloupce (list / card / detail)
+
+Kterýkoli ze tří pohledů může přidat sloupce pouze pro čtení, odvozené SQL
+výrazem **v době dotazu**, místo výběru existujících sloupců tabulky:
+
+```yaml
+    list:
+      computed:
+        - { name: total_gross, label: "Total gross", type: float,    expression: "helpers.round(total * 1.21, 2)" }
+        - { name: age_days,    label: "Age (days)",  type: integer,  expression: "helpers.date_diff(helpers.now(), created_at)" }
+      filter:
+        where: "total_gross > $1"        # vypočítané sloupce fungují v filter.where
+```
+
+- `name` je klíč sloupce (jedinečný v rámci bloku, nesmí kolidovat s reálným
+  sloupcem), `type` jeden ze sdílených typů polí, `expression` SQL fragment.
+- Výraz může odkazovat na **skutečné sloupce tabulky** (včetně aliasů joinů
+  `{fk}_label`) a **dřívější vypočítané názvy ve stejném bloku**. Předává se
+  doslovně nakonfigurovanému ovladači — použijte SQL syntaxi tohoto ovladače, ne yagy.
+- Tokeny `helpers.*` se expandují při generování do driver-korektního SQL:
+  `helpers.date_diff(a,b)` / `helpers.year_diff` / `helpers.month_diff`,
+  `helpers.coalesce`, `helpers.ifnull` (IFNULL/ISNULL/COALESCE podle driveru),
+  `helpers.round(x,n)` (numeric cast na postgres), `helpers.now()`. Volání mohou
+  být vnořená (`helpers.date_diff(helpers.now(), created_at)`); neznámé helpers nebo
+  špatné arity se vypíšou doslovně.
+- Vypočítané sloupce se vykreslují a skenují jako sloupce pohledů, ale nikdy nejsou řaditelné
+  ani vyhledávatelné a nikdy se neobjeví ve formulářích. Filtr odkazující na vypočítaný název
+  je podporován (dotaz se generuje z wrapperu derived table).
+- Vypočítaná pole jsou **výstupy pouze pro čtení** — nedochází k žádnému uložení, žádné
+  zápisové cestě a neovlivňují introspekci `init`.
 
 #### `form` — create / update / delete
 
@@ -456,27 +487,27 @@ Rendered as a read-only record page; keyed by the resource’s row key.
         fields:
           - { name: name,      type: text,     required: true }
           - { name: email,     type: email,    required: true }
-          - { name: password,  type: password }            # bcrypt-hashed before insert
+          - { name: password,  type: password }            # bcrypt hash před insertem
           - { name: role_id,   type: relation, options_value: id, options_label: name }
           - { name: status,    type: select,   options: { active: Active, inactive: Inactive } }
         hooks: { before: [ { name: validate_domain, fn: ValidateUserDomain } ] }
       update:
         fields: [ { name: name }, { name: email }, { name: status } ]
-      delete: {}                 # presence enables the delete route
-    children:                   # optional master-detail sections
+      delete: {}                 # přítomnost aktivuje delete rutu
+    children:                   # volitelné master-detail sekce
       - name: Lines
         resource: OrderLine
         column: order_id
         columns: [ { name: qty, label: "Qty", type: integer } ]
 ```
 
-- `select`/`relation` fields with resolvable options render as a **modal record picker**;
-  `copies:` auto-fills sibling form fields from the picked row.
-- The shared form template renders the **union** of create + update fields
-  (`visible: [create]`/`[update]` fine-tunes per context).
-- `delete: {}` enables the delete button + POST route.
+- Pole `select`/`relation` s řešitelnými volbami se vykreslí jako **modální record picker**;
+  `copies:` automaticky vyplní sousední pole formuláře z vybraného řádku.
+- Sdílená šablona formuláře vykreslí **sjednocení** polí create + update
+  (`visible: [create]`/`[update]` jemně doladí podle kontextu).
+- `delete: {}` aktivuje tlačítko smazání + POST rutu.
 
-#### `policies` — RBAC (optional)
+#### `policies` — RBAC (volitelné)
 
 ```yaml
     policies:
@@ -487,8 +518,8 @@ Rendered as a read-only record page; keyed by the resource’s row key.
       delete:    "admin"
 ```
 
-The generated app checks the logged-in user’s role against the pipe-separated list per
-route.
+Vygenerovaná aplikace kontroluje roli přihlášeného uživatele proti seznamu oddělenému
+pipingem pro každou rutu.
 
 #### `audit`
 
@@ -496,20 +527,20 @@ route.
 audit:
   enabled: true
   table: audit_log
-  include_values: true      # store changed values as JSON
-  policy: "admin"           # who can view the generated AuditLog list
+  include_values: true      # uložit změněné hodnoty jako JSON
+  policy: "admin"           # kdo může zobrazit vygenerovaný seznam AuditLog
   exclude_resources: [Users]
 ```
 
-Adds a list-only `AuditLog` resource + “Audit Log” navigation group, and wraps every
-mutating op + audit insert in one transaction.
+Přidá resource `AuditLog` pouze pro čtení + navigační skupinu "Audit Log" a obalí každou
+mutaci + audit insert do jedné transakce.
 
-### `pages` — custom dashboards
+### `pages` — vlastní dashboards
 
 ```yaml
 pages:
   - name: Dashboard
-    default: true                 # landing page after login (mounted at / and /dashboard)
+    default: true                 # úvodní stránka po přihlášení (namontována na / a /dashboard)
     widgets:
       - { type: stat,       label: "Total Users",   query: "SELECT COUNT(*) FROM users", icon: users }
       - { type: chart,      label: "Revenue",       query: "SELECT month, total FROM revenue ORDER BY month",
@@ -517,110 +548,122 @@ pages:
       - { type: table,      label: "Recent Orders", query: "SELECT id, customer_id, total FROM orders ORDER BY created_at DESC LIMIT 5",
           data_columns: [id, customer_id, total] }
       - { type: list,       label: "Top Products",  query: "SELECT name, price FROM products ORDER BY price DESC LIMIT 5" }
-      - { type: html,       label: "Note",          query: "SELECT note FROM notes LIMIT 1" }   # trusted input only
+      - { type: html,       label: "Note",          query: "SELECT note FROM notes LIMIT 1" }   # pouze důvěryhodný vstup
 ```
 
-Widgets: `stat`, `stats_grid`, `chart` (line/bar/pie/area), `table`, `list`, `html`.
-`query` is raw SQL executed at request time; widget errors are logged and never blank the
-page.
+Widgety: `stat`, `stats_grid`, `chart` (line/bar/pie/area), `table`, `list`, `html`.
+`query` je surový SQL spouštěný v době požadavku; chyby widgetů se logují a nikdy
+nevyprázdní stránku.
 
-### Field types
+### Typy polí
 
-`type` is a **UI rendering hint** — the actual DB column types come from the
-`schema:` block. Applies to list `columns`, detail `fields`, card `fields` and form
-`fields`: `string`, `text`, `integer`, `float`, `email`, `password`, `boolean`, `select`,
+`type` je **nápověda pro UI rendering** — skutečné typy sloupců DB pocházejí z
+bloku `schema:`. Vztahuje se na `columns` v list, `fields` v detail, `fields` v card a
+`fields` v form: `string`, `text`, `integer`, `float`, `email`, `password`, `boolean`, `select`,
 `datetime`, `date`, `badge`, `image`, `file`, `relation`, `json`, `gps`.
 
 ---
 
-## 5. Editors
+## 5. Editory
 
-`yaga.yaml` is a plain YAML file; edit it with any text editor — but yaga ships four
-integrated ways:
+`yaga.yaml` je prostý YAML soubor; upravte ho libovolným textovým editorem — ale yaga
+dodává čtyři integrované způsoby:
 
 ### 5.1 TUI editor — `yaga edit`
 
-Keyboard-driven terminal UI (3 panes: navigation list | content | status bar) covering
-every config section with live validation.
+Klávesnicí řízené terminálové UI (3 panely: seznam navigace | obsah | stavový řádek)
+pokrývající každou sekci konfigurace s živou validací.
 
-- `Ctrl+S` save (validates first), `Ctrl+V` validate, `Ctrl+Q`/`F10` quit, `Esc` back.
-- `Ctrl+P` opens a **cd-style path navigator** (e.g. `/Resources/User/List/Columns`,
-  `../Columns`), `Tab` autocompletes.
-- `Ctrl+O` goes home. Every button also gets a `Ctrl+<letter>` shortcut shown in its
-  label.
-- In list editors `a`/`d` add/delete rows, `Enter` edits; `stringMapPage` edits
-  maps (`options:`, query params, `copies:`).
+- `Ctrl+S` uložit (nejprve validuje), `Ctrl+V` validovat, `Ctrl+Q`/`F10` ukončit, `Esc` zpět.
+- `Ctrl+P` otevře **cd-style navigátor cest** (např. `/Resources/User/List/Columns`,
+  `../Columns`), `Tab` doplní.
+- `Ctrl+O` domů. Každé tlačítko má také zkratku `Ctrl+<písmeno>` zobrazenou v
+  jeho popisku.
+- V editorech seznamů `a`/`d` přidává/maže řádky, `Enter` upravuje; `stringMapPage` upravuje
+  mapy (`options:`, parametry dotazů, `copies:`).
 
-Unrelated files are left alone; only the config you edit is touched.
+Nesouvisející soubory nechává nedotčené; upravuje pouze konfiguraci, kterou editujete.
 
-### 5.2 Web editor — `yaga wedit`
+### 5.2 Webový editor — `yaga wedit`
 
 ```sh
 yaga wedit                       # http://localhost:9090
-yaga wedit --port 9091 --open    # custom port / open the browser
+yaga wedit --port 9091 --open    # vlastní port / otevřít prohlížeč
 ```
 
-A local HTTP server with an embedded single-page app:
+Lokální HTTP server s vestavěnou single-page aplikací:
 
-- Tab editors for panel, connections, auth, navigation, resources, pages;
-- a **Validate** screen running the full validator (+ auto-fix) live;
-- a **Preview** tab rendering a mock dashboard and per-resource list views (page/resource
-  mocks, light/dark theme);
-- a raw-YAML tab;
-- edits are held **in memory** — explicit **Save** writes to disk (the MCP `save` tool
-  backs up `<config>.bak` first);
-- multiple browser tabs **live-sync** (SSE + revision counter); a stale tab is warned before
-  it can silently overwrite newer changes.
+- Panelové editory pro panel, connections, auth, navigaci, resources, stránky;
+- obrazovka **Validate** spouštějící plný validátor (+ auto-fix) živě;
+- záložka **Preview** renderující mock dashboard a pohledy seznamů per-resource (mocky
+  stránek/zdrojů, světlý/tmavý režim);
+- záložka surového YAML;
+- úpravy se drží **v paměti** — explicitní **Save** zapíše na disk (nástroj MCP `save`
+  nejprve vytvoří zálohu `<config>.bak`);
+- více záložek prohlížeče se **synchronizují živě** (SSE + čítač revizí); zastaralá záložka
+  je varována, než může potichu přepsat novější změny.
 
-### 5.3 AI-assisted edit — `yaga edit --prompt "…"`
+### 5.3 AI podporovaná úprava — `yaga edit --prompt "…"`
 
 ```sh
 yaga edit --prompt "Change the dashboard title to: Order management"
 yaga edit --prompt file://./instructions.txt
 ```
 
-Sends the full config to a model and merges back **only the changed sections** (validated;
-an invalid merge is retried once, then the file is left untouched). Useful for quick
-single-purpose edits. For serious AI-driven work, prefer the **MCP** route (see below),
-which sees the same in-memory config as the web editor.
+Pošle celou konfiguraci modelu a zpět sloučí **pouze změněné sekce** (validované;
+neplatné sloučení se znovu zkusí jednou, pak soubor zůstane nedotčený). Užitečné pro rychlé
+jednoúčelové úpravy. Pro vážnější AI řízenou práci upřednostňujte cestu **MCP** (viz níže),
+která vidí stejnou konfiguraci v paměti jako webový editor.
 
-### 5.4 MCP (AI agents over `wedit`)
+### 5.4 MCP (AI agenti přes `wedit`)
 
-`yaga wedit` serves a **Model Context Protocol (Streamable HTTP)** endpoint at
-`POST /mcp` (also `GET /mcp`), so AI agents can read and edit the live config through
-structured tools: `get_config`, `get_value`, `set_value`, `merge_yaml_fragment`,
+`yaga wedit` poskytuje endpoint **Model Context Protocol (Streamable HTTP)** na
+`POST /mcp` (také `GET /mcp`), takže AI agenti mohou číst a upravovat živou konfiguraci
+přes strukturované nástroje: `get_config`, `get_value`, `set_value`, `merge_yaml_fragment`,
 `add_resource`, `remove_resource`, `add_column`, `add_field`, `add_nav_item`,
-`remove_nav_item`, `validate`, `save`, … Edits are validated (an invalid edit is rejected)
-and propagate to every connected browser tab automatically.
+`remove_nav_item`, `validate`, `save`, … Úpravy se validují (neplatná úprava je zamítnuta)
+a automaticky se šíří do každé připojené záložky prohlížeče.
 
-To use from opencode (or another MCP client):
+Pro použití z opencode (nebo jiného MCP klienta):
 
 ```json
 { "mcp": { "yaga": { "type": "remote", "url": "http://localhost:9090/mcp" } } }
 ```
-
+Plný příklad konfigurace Opencode MCP:
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "yaga": {
+      "type": "remote",
+      "url": "http://localhost:9090/mcp",
+      "enabled": true
+    }
+  }
+}
+```
 ---
 
-## 6. Actions & Hooks
+## 6. Akce a háčky (Actions & Hooks)
 
-Two mechanisms to run your own logic from the dashboard at request time.
+Dva mechanismy pro spuštění vlastní logiky z dashboardu v době požadavku.
 
-### 6.1 Actions — buttons that do things
+### 6.1 Akce — tlačítka, která něco dělají
 
-An **action** is a custom button on a resource (per-record or bulk) that runs a piece of
-logic when clicked. Use them for operations the CRUD builder can’t express: “Mark as
-shipped”, “Archive”, “Recalculate”, “Call a stored procedure”.
+**Akce** je vlastní tlačítko na resource (pro každý záznam nebo hromadně), které po kliknutí
+spustí kus logiky. Použijte je pro operace, které CRUD builder nedokáže vyjádřit: "Označit jako
+odeslané", "Archivovat", "Přepočítat", "Zavolat uloženou proceduru".
 
-- `query:` inline raw SQL executed with the record id bound as `$1`;
-- `proc:` the name of a stored procedure (Postgres `CALL`, MSSQL `EXEC`, SQLite
-  `procedures:` batch);
-- `script:` an embedded Lua body (request-time execution under a 5 s timeout);
-- each action gets a POST route `/<panel>/<resource>/{id}/action/<name>` (unknown names
+- `query:` inline surový SQL spouštěný s id záznamu navázaným jako `$1`;
+- `proc:` název uložené procedury (Postgres `CALL`, MSSQL `EXEC`, SQLite
+  `procedures:` dávka);
+- `script:` vestavěné Lua tělo (spouštění v době požadavku s 5s timeoutem);
+- každá akce dostane POST rutu `/<panel>/<resource>/{id}/action/<name>` (neznámé názvy
   → 404);
-- `bulk: true` renders row checkboxes + a toolbar; the bulk loop runs inside **one
-  transaction**.
+- `bulk: true` vykreslí zaškrtávací pole řádků + panel nástrojů; hromadný cyklus běží uvnitř
+  **jedné transakce**.
 
-**Example — SQL action:**
+**Příklad — SQL akce:**
 
 ```yaml
     actions:
@@ -632,17 +675,17 @@ shipped”, “Archive”, “Recalculate”, “Call a stored procedure”.
         query: "UPDATE orders SET status = 'done' WHERE id = $1"
 ```
 
-**Example — procedure action:**
+**Příklad — akce procedury:**
 
 ```yaml
       - name: archive
         label: "Archive"
-        proc: sp_archive_customer      # CALL sp_archive_customer($1) on postgres,
-                                       # EXEC sp_archive_customer $1 on mssql
+        proc: sp_archive_customer      # CALL sp_archive_customer($1) na postgres,
+                                       # EXEC sp_archive_customer $1 na mssql
 ```
 
-On SQLite (no real stored procedures), the same `proc:` refers to a named SQL batch
-declared under the top-level `procedures:` block, executed inside one transaction:
+Na SQLite (bez skutečných uložených procedur), stejný `proc:` odkazuje na pojmenovanou SQL dávku
+deklarovanou v bloku nejvyšší úrovně `procedures:`, spouštěnou uvnitř jedné transakce:
 
 ```yaml
 procedures:
@@ -653,7 +696,7 @@ procedures:
       INSERT INTO customer_log (customer_id, msg) VALUES ($1, 'archived');
 ```
 
-**Example — Lua action:**
+**Příklad — Lua akce:**
 
 ```yaml
       - name: flag_audit
@@ -665,23 +708,23 @@ procedures:
           end
 ```
 
-### 6.2 Hooks — run before / after a create, an update, a delete or an action
+### 6.2 Háčky — spuštění before / after create, update, delete nebo akce
 
-A **hook** is a piece of code attached to the lifecycle of a mutating operation:
+**Hook** je kus kódu připojený k životnímu cyklu mutační operace:
 
-- `form.create` → `before` (with `scope.id` = 0) and `after` (with the new row id);
+- `form.create` → `before` (s `scope.id` = 0) a `after` (s novým id řádku);
 - `form.update` / `form.delete` → `before` / `after`;
 - `action` → `before` / `after`;
 
-Each hook in one of four kinds:
+Každý hook je jednoho ze čtyř typů:
 
-1. **`fn: <Name>`** — the generator emits a compile-ready `func <Name>(s *hooks.Scope)`
-   stub into `internal/hooks/hooks.go`; you fill in the Go body. Full power.
-2. **`sql: "…"`** — an inline SQL statement executed with `db.ExecContext(…, scope.ID)`.
-3. **`proc: <name>`** — call a stored procedure with the record id.
-4. **`script: |`** — an embedded Lua body (in the same context as script actions).
+1. **`fn: <Name>`** — generátor vypíše kompilace-schopný stub `func <Name>(s *hooks.Scope)`
+   do `internal/hooks/hooks.go`; vy doplníte Go tělo. Plná moc.
+2. **`sql: "…"`** — inline SQL příkaz spouštěný přes `db.ExecContext(…, scope.ID)`.
+3. **`proc: <name>`** — zavolá uloženou proceduru s id záznamu.
+4. **`script: |`** — vestavěné Lua tělo (ve stejném kontextu jako script akce).
 
-**Example — SQL hook (after create):**
+**Příklad — SQL hook (after create):**
 
 ```yaml
     form:
@@ -692,7 +735,7 @@ Each hook in one of four kinds:
               sql: "INSERT INTO notifications (target, msg) VALUES ($1, 'user created')"
 ```
 
-**Example — Lua hook (set a default before create):**
+**Příklad — Lua hook (nastavení výchozí hodnoty before create):**
 
 ```yaml
     form:
@@ -706,49 +749,49 @@ Each hook in one of four kinds:
                 end
 ```
 
-`ctx` exposes `id`, `table`, `action`, `user`, `role`, and `values` (for before-
-create/update, changes are written back to the row). Host helpers: `db.exec(sql,
-vars...)`, `db.query(sql, vars...)`, `db.query_one(sql, vars...)` (positional `?`
-bound on sqlite, auto-renumbered to `$N` on postgres/mssql), `abort(msg)` (stops with a
-visible flash / 400) and `log(msg)`. On create, the insert switches to a driver-aware
-`RETURNING` / `OUTPUT INSERTED.<id>` so after-create hooks receive the real row id. A
-hook error aborts the request with HTTP 500.
+`ctx` poskytuje `id`, `table`, `action`, `user`, `role` a `values` (pro before-
+create/update, změny se zapisují zpět do řádku). Host helpers: `db.exec(sql,
+vars...)`, `db.query(sql, vars...)`, `db.query_one(sql, vars...)` (pozicionální `?`
+navázaný na sqlite, automaticky přečíslovaný na `$N` na postgres/mssql), `abort(msg)` (zastaví
+s viditelným flashem / 400) a `log(msg)`. Při create se insert přepne na driver-aware
+`RETURNING` / `OUTPUT INSERTED.<id>` takže after-create hooky obdrží skutečné id řádku. Chyba
+hooku přeruší požadavek s HTTP 500.
 
 ---
 
-## 7. Important technical notes
+## 7. Důležité technické poznámky
 
-- **Building generated app requires a Go toolchain.** No npm, no sqlc, no Tailwind
-  binary — but `go` must be on the machine that runs `make build`. For machines without
-  Go, deploy the binary (`make package` bundles binary + static + `.ENV` + migrations).
-- **The DSN is a runtime concern.** It lives in `.ENV` (0600) next to the binary, with
-  `DATABASE_URL` env override, and is never compiled in. `yaga.yaml` still contains the
-  plaintext DSN.
-- **`.ENV` is regenerated by `yaga generate`**; for per-deployment databases set
-  `DATABASE_URL` (env) or edit `.ENV` after generation.
-- **`yaga generate` is fully offline** — it never hits the database and never runs sqlc
-  or a Tailwind binary. Schema comes from the captured `schema:` block.
-- **`init --db` is the only scaffold.** Without `--db`, `init` errors; there is no empty
-  template or `--demo`.
-- **Default admin login** — `admin@admin.test` / the one-time password printed by
-  `init --db` (or `--admin-password`); roles table defaults to `admin`/`manager`/`user`.
-- **The server pre-checks the DB** before binding the port (sanity `SELECT 1` against the
-  auth table), so a broken/missing DB is a fatal startup error, not a runtime waiting
-  behind an open port.
-- **Session secret** — set `SESSION_SECRET` (≥ 32 chars) for persistence; with
-  `APP_ENV=production` a missing secret is fatal. Otherwise sessions reset on restart.
-- **`query:`/`count_query:`/`populate_query:`/`params:` (and the legacy `sqlc:` block)**
-  are accepted but ignored in D11 — handlers use raw SQL + the `schema:` block instead.
-- **Field `type:` is a hint**; the DB types are authoritative. Matching db/schema columns
-  keep the editors and Validate happy.
-- **Generated code contains no comments** and the generated app has **no runtime
-  dependency** on the yaga module — deploy the binary and you’re done.
-- **Security defaults** ship out of the box: CSRF, session rotation, upload validation
-  (HTML/SVG rejected), safe `500/404` responses, CSV formula-injection shell, sort/order
-  whitelist, optional login rate limiting (details in `README.md` → Security).
-- `yaga generate` (and every other command) also writes an `AGENTS.md` agent guide into
-  the current directory when absent — it tells AI agents how to work with the generated
-  project.
-- Full references: `README.md` (quick start + config reference), `SPEC.md`
-  (authoritative schema), `AGENTS.md` (agent + maintainer details), `SPEC_summary.md`
-  (feature matrix).
+- **Sestavení vygenerované aplikace vyžaduje Go toolchain.** Žádný npm, žádný sqlc, žádný
+  binární soubor Tailwind — ale `go` musí být na stroji, který spouští `make build`. Pro
+  stroje bez Go nasadte binární soubor (`make package` zabalí binární soubor + static + `.ENV` + migrace).
+- **DSN je záležitost běhu.** Žije v `.ENV` (0600) vedle binárního souboru, s
+  přepisem `DATABASE_URL` (env) a nikdy není kompilována dovnitř. `yaga.yaml` stále obsahuje
+  plaintextovou DSN.
+- **`.ENV` je přegenerováno příkazem `yaga generate`**; pro databáze per-nasazení nastavte
+  `DATABASE_URL` (env) nebo upravte `.ENV` po generování.
+- **`yaga generate` je plně offline** — nikdy se nepřipojuje k databázi a nikdy nespouští sqlc
+  ani binární soubor Tailwind. Schéma pochází z zachyceného bloku `schema:`.
+- **`init --db` je jediná kostra.** Bez `--db` init chybuje; neexistuje prázdná
+  šablona ani `--demo`.
+- **Výchozí přihlášení administrátora** — `admin@admin.test` / jednorázové heslo vypsané
+  příkazem `init --db` (nebo `--admin-password`); tabulka rolí má výchozí hodnoty `admin`/`manager`/`user`.
+- **Server předem kontroluje DB** před navázáním portu (sanity `SELECT 1` proti
+  auth tabulce), takže rozbitá/chybějící DB je fatální chyba při spuštění, ne běh
+  za otevřeným portem.
+- **Tajemství session** — nastavte `SESSION_SECRET` (≥ 32 znaků) pro perzistenci; s
+  `APP_ENV=production` chybějící tajemství je fatální. Jinak se session resetují při restartu.
+- **`query:`/`count_query:`/`populate_query:`/`params:` (a starší blok `sqlc:`)**
+  jsou přijaty ale ignorovány v D11 — handlery používají surový SQL + blok `schema:` místo nich.
+- **Pole `type:` je nápověda**; typy DB jsou autoritativní. Odpovídající sloupce db/schema
+  udržují editory a Validate spokojené.
+- **Generovaný kód neobsahuje komentáře** a vygenerovaná aplikace má **žádnou běhovou
+  závislost** na modulu yaga — nasadte binární soubor a je hotovo.
+- **Výchozí bezpečnostní nastavení** jsou připravena: CSRF, rotace session, validace uploadu
+  (HTML/SVG zamítnuto), bezpečné odpovědi `500/404`, CSV formula-injection shell, whitelist
+  řazení/objednávky, volitelný limit pokusů o přihlášení (podrobnosti v `README.md` → Security).
+- `yaga generate` (a každý další příkaz) také zapíše průvodce agenta `AGENTS.md` do
+  aktuálního adresáře, pokud chybí — říká AI agentům, jak pracovat s vygenerovaným
+  projektem.
+- Plné reference: `README.md` (rychlý start + refernce konfigurace), `SPEC.md`
+  (autoritativní schéma), `AGENTS.md` (detaily agenta + správce), `SPEC_summary.md`
+  (matrice funkcí).
