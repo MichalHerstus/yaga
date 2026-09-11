@@ -301,7 +301,7 @@ connections:
 
 - `driver` determines the `sql.Open` driver, the LIKE operator (`ILIKE` on postgres, `LIKE` on sqlite/mssql), bind placeholders (`$N` vs positional `?`), identifier quoting (`"name"` vs `[name]`), and the id type throughout generation (`int32` postgres/mssql, `int64` sqlite unless overridden by `id_type`). If every entry omits `driver`, it defaults to `postgres`.
 - `dsn` is written to a `.ENV` file in the generated project (`DATABASE_URL=<dsn>`, mode 0600) — it is **not** compiled into the binary. At runtime the `DATABASE_URL` environment variable wins over the `.ENV` value; if neither is set and a connection was configured, the server refuses to start. A SQLite example: `file:./data/admin.db`.
-- SQLite requires `github.com/mattn/go-sqlite3`; MSSQL requires `github.com/microsoft/go-mssqldb`. The matching driver import is added to the generated `go.mod` automatically.
+- SQLite uses `modernc.org/sqlite` (pure Go, no CGO — cross-compiles to Windows/Linux/macOS with `CGO_ENABLED=0`); MSSQL requires `github.com/microsoft/go-mssqldb`. The matching driver import is added to the generated `go.mod` automatically.
 - The generated server applies pool settings, then runs a DB sanity query against the auth table **before** binding the port (mssql `SELECT TOP 1 1`, others `SELECT 1 … LIMIT 1`).
 
 ### Schema

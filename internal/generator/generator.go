@@ -275,6 +275,10 @@ func (g *Generator) Generate() error {
 		return fmt.Errorf("generating Makefile: %w", err)
 	}
 
+	if err := g.generateBuildScript(); err != nil {
+		return fmt.Errorf("generating build.ps1: %w", err)
+	}
+
 	if err := g.generateViewModels(); err != nil {
 		return fmt.Errorf("generating view models: %w", err)
 	}
@@ -316,11 +320,11 @@ func (g *Generator) ensureDirs() error {
 	}
 
 	for _, r := range g.Config.Resources {
-		resDir := filepath.Join("internal/panel/resources", strings.ToLower(r.Name))
+		resDir := filepath.Join("internal/panel/resources", resourcePkgName(r.Name))
 		if err := os.MkdirAll(filepath.Join(g.OutDir, resDir), 0755); err != nil {
 			return err
 		}
-		viewDir := filepath.Join("internal/views/resources", strings.ToLower(r.Name))
+		viewDir := filepath.Join("internal/views/resources", resourcePkgName(r.Name))
 		if err := os.MkdirAll(filepath.Join(g.OutDir, viewDir), 0755); err != nil {
 			return err
 		}

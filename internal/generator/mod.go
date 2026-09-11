@@ -14,13 +14,13 @@ import (
 // generateGoMod writes go.mod for the generated project, using the base name
 // of g.OutDir as the module name and the pinned dependency versions from the
 // AGENTS.md guide. The matching database driver is added per driver: pgx for
-// postgres, mattn/go-sqlite3 for sqlite, go-mssqldb for mssql.
+// postgres, modernc.org/sqlite for sqlite, go-mssqldb for mssql.
 // Returns an error on write failure.
 func (g *Generator) generateGoMod() error {
 	modName := filepath.Base(g.OutDir)
 	driverDep := ""
 	if g.isSQLite() {
-		driverDep = "\tgithub.com/mattn/go-sqlite3 v1.14.24\n"
+		driverDep = "\tmodernc.org/sqlite v1.55.0\n"
 	} else if g.isMSSQL() {
 		driverDep = "\tgithub.com/microsoft/go-mssqldb v1.10.0\n"
 	} else {

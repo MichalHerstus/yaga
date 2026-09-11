@@ -97,7 +97,9 @@ Flags: `init --db <dsn> --config <yaml> --out <dir> --force --update` (short var
 
 **Preview screen** (`preview.go`): ASCII-frame mock of the dashboard (topbar + sidebar from `cfg.Navigation` + per-page widget boxes) and per-resource list mock. The grid chrome (`│ ├ ┬ ┤ ┌ ┐ └ ┘ ─`) is drawn in light blue (`[lightblue]`) while the cell text is white (`[white]`), and every row is padded to the exact same total width (`previewWidth`=78) via `padVisual` (tag-aware: `tview.TaggedStringWidth`) — content row widths are `previewSideWidth`=26 / `previewContentWidth`=49 so the chrome rows (top/bottom borders, column separator) all add up to `previewWidth`. `colorStable` rewrites full color resets (`[-:-:-]`/`[:]`) from content into attribute-only `[::-]` so neither grid nor text color survives emphasis tags intact. No DB, no generated app.
 
-The generated `admin/` contains a `Makefile` (written by `generateMakefile()` in `makefile.go`). Its default `build` target runs every step needed to produce the dashboard binary, in order: `go mod tidy` → `go tool templ generate` → `go build -o <binary> .` (binary name = `--out` basename). Individual steps are also exposed as `templ`, `tidy` targets, plus `run` (build + serve), `package` (bundle into a release tar.gz) and `clean`. **No npm/node, no sqlc and no Tailwind are required** (D8 + D12): Chart.js is embedded into the yaga binary and vendored to `static/js/chart.js` at generation time, and the Tailwind stylesheet is **pre-built** and vendored to `static/css/styles.css` — the generated project never runs a Tailwind binary.
+The generated `admin/` contains a `Makefile` (written by `generateMakefile()` in `makefile.go`) **and** a `build.ps1` (written by `generateBuildScript()` in `buildscript.go`), so the dashboard builds on both Unix (make) and Windows (PowerShell, no make). The Makefile's default `build` target runs every step needed to produce the dashboard binary, in order: `go mod tidy` → `go tool templ generate` → `go build -o <binary> .` (binary name = `--out` basename). Individual steps are also exposed as `templ`, `tidy` targets, plus `run` (build + serve), `package` (bundle into a release tar.gz) and `clean`. **No npm/node, no sqlc and no Tailwind are required** (D8 + D12): Chart.js is embedded into the yaga binary and vendored to `static/js/chart.js` at generation time, and the Tailwind stylesheet is **pre-built** and vendored to `static/css/styles.css` — the generated project never runs a Tailwind binary.
+
+**Windows (`build.ps1`):** `powershell -ExecutionPolicy Bypass -File .\build.ps1 [build|templ|tidy|run|package|clean]` mirrors the same Makefile targets — the script is emitted as an interpreted Go string (never a raw literal, PowerShell backticks would fight the Go raw-string quoting), uses `Invoke-Expression` per step with `$ErrorActionPreference = "Stop"` + `$LASTEXITCODE` checks, `tar.exe -czf` (bundled with Windows 10+) for `package`, and `Remove-Item` for `clean`. The binary name is the `--out` basename (passed as the `-Binary` parameter, default matching the Makefile); `run` passes `--port $Port` / `--log $Log`. Since the sqlite driver is pure Go (`modernc.org/sqlite`), Windows builds need **no CGO, no gcc, no make** — the whole `go tool templ generate` + `go build` flow runs on a bare Go toolchain.
 
 Equivalent manual steps:
 
@@ -155,15 +157,16 @@ Driver comes from the first `connections:.*.driver` value (default `"postgres"`)
 
 | Concern | postgres | sqlite | mssql |
 |---|---|---|---|
-| `sql.Open` driver | `pgx` + `_ "github.com/jackc/pgx/v5/stdlib"` | `sqlite3` + `github.com/mattn/go-sqlite3` | `mssql` + `_ "github.com/microsoft/go-mssqldb"` |
-| go.mod | adds `github.com/jackc/pgx/v5 v5.10.0` | adds `github.com/mattn/go-sqlite3 v1.14.24` | adds `github.com/microsoft/go-mssqldb v1.10.0` |
+| `sql.Open` driver | `pgx` + `_ "github.com/jackc/pgx/v5/stdlib"` | `sqlite` + `_ "modernc.org/sqlite"` | `mssql` + `_ "github.com/microsoft/go-mssqldb"` |
+| go.mod | adds `github.com/jackc/pgx/v5 v5.10.0` | adds `modernc.org/sqlite v1.55.0` | adds `github.com/microsoft/go-mssqldb v1.10.0` |
+| CGO | required (libc) — no static cross-builds | **none** (pure Go) — `CGO_ENABLED=0` static builds for linux/windows/macOS | none — `CGO_ENABLED=0` static builds |
 | LIKE operator | `ILIKE` | `LIKE` | `LIKE` (case-insensitive default collation) |
 | bind placeholders | `$N` | `?` (positional, SQL-text order) | `$N` (go-mssqldb loose mode maps `$N`→`@pN`) |
 | identifier quoting | `"name"` | `"name"` | `[name]` |
 | data-query id type | `int32` | `int64` | `int32` (unless `id_type` overrides; bigint → `int64`) |
 | pagination | `LIMIT $1 OFFSET $2` | `LIMIT ? OFFSET ?` | `OFFSET $2 ROWS FETCH NEXT $1 ROWS ONLY` (REQUIRES an ORDER BY; no ORDER BY → emit `ORDER BY (SELECT NULL)`) |
 
-Helpers in `generator.go`: `driver()`, `isSQLite()`, `isMSSQL()`, `placeholder(n)`, `likeOp()`, `idGoType()`, `idGoTypeForResource(r)` (honors `id_type`), and `tableName(r)`/`idColumn(r)` in `handler.go` (honor `table`/`id_column` overrides). **`placeholder()` is still unused** — create/update/delete handlers hardcode `$N` (works on sqlite since mattn binds positionally, and on mssql via loose `$N` parsing). Only the list/card handlers are driver-aware.
+Helpers in `generator.go`: `driver()`, `isSQLite()`, `isMSSQL()`, `placeholder(n)`, `likeOp()`, `idGoType()`, `idGoTypeForResource(r)` (honors `id_type`), and `tableName(r)`/`idColumn(r)` in `handler.go` (honor `table`/`id_column` overrides). **`placeholder()` is still unused** — create/update/delete handlers hardcode `$N` (works on sqlite since modernc binds positionally, and on mssql via loose `$N` parsing). Only the list/card handlers are driver-aware.
 
 ### Identifier quoting (all raw SQL)
 
@@ -187,10 +190,10 @@ Every identifier in `listSelectFrom` (`labelJoins`, LEFT JOIN table/column/label
 - Sanity check in generated main.go for mssql is `SELECT TOP 1 1 FROM {table}` (`TOP 1` replaces `LIMIT 1`).
 
 ### Generated main.go: DB sanity check runs BEFORE binding the port
-`generateMain()` (`main.go`) emits `sql.Open` → `db.Ping()` → **sanity query against `{auth.table}`** (mssql: `SELECT TOP 1 1 FROM …`; others: `SELECT 1 FROM … LIMIT 1`; `sql.ErrNoRows` treated as OK) → only then `net.Listen` + `srv.Serve`. **`connections.*.pool` settings** (`max_open_conns`/`max_idle_conns`/`conn_max_lifetime`) are emitted as `db.SetMaxOpenConns`/`SetMaxIdleConns`/`SetConnMaxLifetime` setters right after `Ping()` and before the sanity query (lifetime parsed via `time.ParseDuration`, silently skipped on error); no setters when the block is absent (tested by `TestGeneratePoolSettings`). Rationale: mattn/go-sqlite3 silently **creates an empty DB file** when the file is missing, so `db.Ping()` succeeds against a "not found" database and the dashboard would otherwise bind the port and run broken (`no such table`) while holding it — a restart then hits `address already in use`. The sanity query makes a missing/uninitialized DB a fatal startup error **before** the port is bound. The listen port is resolved as `--port` flag (`-p` alias) → `ADDR` env → `:8080` (`flag.Int("port", 0, ...)` + `flag.IntVar(port, "p", 0, ...)`; stdlib `flag` accepts both `--port 9090` and `-port 9090`); the emitted `Makefile` `run` target passes `--port $(PORT)` (`PORT ?= 8080`). Request logging is controlled by `--log` (`-l` alias), values `full` (default, chi's `middleware.Logger`, logs every request) or `err` (only requests that produced an error response, status >= 400) — the flag value is threaded through `NewRouter(db, logLevel)` and selects `middleware.Logger` vs the generated `errorOnlyLogger` (a `middleware.NewWrapResponseWriter` wrapper that `log.Printf`s only when `Status() >= 400`); the `Makefile` `run` target passes `--log $(LOG)` (`LOG ?= full`). `--help`/`-h` prints the command line syntax + flag meanings via `flag.Usage` (custom `flag.PrintDefaults` wrapper) and exits 0 BEFORE any DB or session work. **The generated `auth/session.go` must NOT use a package `init()`** — its `Init()` is called explicitly by `main()` right after the help check (before `sql.Open`), so `-h/--help` runs clean without the `SESSION_SECRET` warning/fail-fast, while production fail-fast still happens before the port binds (`GetSession` also lazily calls `Init()` if `Store` is nil). Generated server also does graceful shutdown on SIGINT/SIGTERM (`signal.NotifyContext` → `srv.Shutdown`) and logs a `is another dashboard instance already running?` hint on bind failure. Keep the bind AFTER the DB checks — ordering is what prevents a broken DB from occupying the port.
+`generateMain()` (`main.go`) emits `sql.Open` → `db.Ping()` → **sanity query against `{auth.table}`** (mssql: `SELECT TOP 1 1 FROM …`; others: `SELECT 1 FROM … LIMIT 1`; `sql.ErrNoRows` treated as OK) → only then `net.Listen` + `srv.Serve`. **`connections.*.pool` settings** (`max_open_conns`/`max_idle_conns`/`conn_max_lifetime`) are emitted as `db.SetMaxOpenConns`/`SetMaxIdleConns`/`SetConnMaxLifetime` setters right after `Ping()` and before the sanity query (lifetime parsed via `time.ParseDuration`, silently skipped on error); no setters when the block is absent (tested by `TestGeneratePoolSettings`). Rationale: modernc.org/sqlite silently **creates an empty DB file** when the file is missing, so `db.Ping()` succeeds against a "not found" database and the dashboard would otherwise bind the port and run broken (`no such table`) while holding it — a restart then hits `address already in use`. The sanity query makes a missing/uninitialized DB a fatal startup error **before** the port is bound. The listen port is resolved as `--port` flag (`-p` alias) → `ADDR` env → `:8080` (`flag.Int("port", 0, ...)` + `flag.IntVar(port, "p", 0, ...)`; stdlib `flag` accepts both `--port 9090` and `-port 9090`); the emitted `Makefile` `run` target passes `--port $(PORT)` (`PORT ?= 8080`). Request logging is controlled by `--log` (`-l` alias), values `full` (default, chi's `middleware.Logger`, logs every request) or `err` (only requests that produced an error response, status >= 400) — the flag value is threaded through `NewRouter(db, logLevel)` and selects `middleware.Logger` vs the generated `errorOnlyLogger` (a `middleware.NewWrapResponseWriter` wrapper that `log.Printf`s only when `Status() >= 400`); the `Makefile` `run` target passes `--log $(LOG)` (`LOG ?= full`). `--help`/`-h` prints the command line syntax + flag meanings via `flag.Usage` (custom `flag.PrintDefaults` wrapper) and exits 0 BEFORE any DB or session work. **The generated `auth/session.go` must NOT use a package `init()`** — its `Init()` is called explicitly by `main()` right after the help check (before `sql.Open`), so `-h/--help` runs clean without the `SESSION_SECRET` warning/fail-fast, while production fail-fast still happens before the port binds (`GetSession` also lazily calls `Init()` if `Store` is nil). Generated server also does graceful shutdown on SIGINT/SIGTERM (`signal.NotifyContext` → `srv.Shutdown`) and logs a `is another dashboard instance already running?` hint on bind failure. Keep the bind AFTER the DB checks — ordering is what prevents a broken DB from occupying the port.
 
 ### sqlite list handler arg order (critical)
-mattn binds `?` args positionally in SQL-text order, so sqlite branch appends **search args first, then `LIMIT ? OFFSET ?`**, and uses `LIKE`. The postgres branch appends `perPage, offset` first with `ILIKE $N` + `LIMIT $1 OFFSET $2`. Mixing these up silently returns wrong rows on sqlite.
+modernc binds `?` args positionally in SQL-text order, so sqlite branch appends **search args first, then `LIMIT ? OFFSET ?`**, and uses `LIKE`. The postgres branch appends `perPage, offset` first with `ILIKE $N` + `LIMIT $1 OFFSET $2`. Mixing these up silently returns wrong rows on sqlite.
 
 ## Generator pipeline (files in `internal/generator/`)
 
@@ -226,7 +229,7 @@ All generation uses `os.WriteFile` + `fmt.Sprintf`, never `text/template`. Nothi
 | Bulk | Raw SQL per bulk action name, looped once per selected id, **inside one transaction** (see "Bulk actions") |
 | CSV Export | Raw SQL SELECT + `encoding/csv` |
 
-Create/update/delete SQL uses `idColumn(r)` (or the explicit column list) for the row key, honoring `id_column:` overrides on mssql. Create/update avoid typed params because `r.FormValue` returns `string`; raw SQL `ExecContext` accepts `interface{}`. **Boolean fields are emitted as `r.FormValue(name) == "true"`** (a Go `bool`), not a raw `r.FormValue(name)` string — otherwise an unchecked checkbox posts `""` and Postgres fails with `invalid input syntax for type boolean: ""` (BUG-3). mssql/pgx/mattn accept a `bool` value directly.
+Create/update/delete SQL uses `idColumn(r)` (or the explicit column list) for the row key, honoring `id_column:` overrides on mssql. Create/update avoid typed params because `r.FormValue` returns `string`; raw SQL `ExecContext` accepts `interface{}`. **Boolean fields are emitted as `r.FormValue(name) == "true"`** (a Go `bool`), not a raw `r.FormValue(name)` string — otherwise an unchecked checkbox posts `""` and Postgres fails with `invalid input syntax for type boolean: ""` (BUG-3). mssql/pgx/modernc accept a `bool` value directly.
 
 Detail/update data queries must cast the id to `idGoType()` — sqlite ids are `int64`, postgres `int32`. A literal `int32(id)` breaks the sqlite build.
 
@@ -280,6 +283,35 @@ All hrefs use `path + "/" + resourceName`. Router uses `r.Route(panelPath, ...)`
 
 ### Resource naming
 PascalCase in YAML (`User`) → lowercase for Go package, dir, URL segment (`user`).
+
+### Config-name → Go identifier sanitization (`ident.go`)
+Config names are free text — panel ids, resource names, page ids, column/field names may
+contain spaces, punctuation, non-ASCII or start with a digit, and raw splicing produces
+invalid Go on every driver. The generator routes every such splice through the helpers in
+`internal/generator/ident.go`:
+- `goIdent(s)`: collapses each run of non-`[A-Za-z0-9_]` characters to a single `_`, prefixes
+  `_` when the result would start with a digit, and **never returns the raw input**. Used for
+  Go identifiers (handler names, package names, func names, scan variable names like
+  `val_size_range`).
+- `capitalize(s)`: empty/rune-safe uppercasing of the first rune.
+- `resourcePkgName(name)` = `goIdent(strings.ToLower(name))` — the canonical resource
+  package/route/dir segment (`Order Management` → `order_management`).
+
+Rules that keep it consistent:
+- **RBAC consistency**: `auth.RBACMiddleware("<resource>", …)` in router.go and `resLower`
+  in auth.go (read from `r.PathValue("name")`) BOTH go through `resourcePkgName(n)` — the
+  runtime path seg and the middleware name must sanitize identically or authorization
+  silently never matches. Never sanitize one and not the other.
+- **Do NOT sanitize**: `tableName(r)` fallback (`strings.ToLower(r.Name)+"s"`, handler.go) —
+  it's a DB table name quoted into SQL, not a Go identifier; display strings
+  (`Resource: %q`, `resourceTitle`, labels); action names (string-compared route/switch
+  values, Go-safe by convention). Map keys keep the raw config name (`data.Item["size range"]`);
+  only the scan-variable side is sanitized.
+- **Validator warning**: `isGoIdent` in parser/validator.go flags a non-identifier config
+  name as a warning (never blocks save/generate) so users see the alias early.
+
+Tested by `TestGenerateIdentifiers` (`spaceyConfig`: panel id `order panel`, resource
+`Order Management`, column `size range`) — generated project builds and runs.
 
 ### Page handler naming
 Generated as `{CapitalPanelID}{PageName}(db)` (e.g. `AdminDashboard`). Must be exported (capitalized) since `pages` package is separate from `panel`.
@@ -480,7 +512,7 @@ the shared `internal/panel/procs/procs.go` package. Only emitted when `usesProce
   `;` only; handles `'…'` strings incl. `''` escapes, `"…"`/`[…]` identifiers, `--` and
   `/* */` comments), runs each statement inside one transaction, drains result rows, rolls
   back on error. **Placeholder binding:** `containsPlaceholder(stmt)` decides whether to
-  bind the id — mattn errors when args exceed placeholders, so statements without `$N` get
+  bind the id — modernc errors when args exceed placeholders, so statements without `$N` get
   no args. The generator package carries byte-identical `splitStatements`/`containsPlaceholder`
   copies (unit-tested in `procs_test.go`); the emitted copy is validated at runtime by e2e.
 - **Driver-aware `proc` emission flips on sqlite:** `hookBlockEmits` is true for a proc hook
@@ -607,6 +639,6 @@ Chart.js is **vendored at generation time** (D8) — no npm, no CDN, runtime is 
 
 ## Generated app dependencies
 
-`github.com/a-h/templ`, `github.com/go-chi/chi/v5`, `github.com/gorilla/sessions`, `golang.org/x/crypto`. Plus `github.com/jackc/pgx/v5` (postgres, blank-imported in main.go), `github.com/mattn/go-sqlite3 v1.14.24` (sqlite, blank-imported in main.go), and `github.com/microsoft/go-mssqldb v1.10.0` (mssql, blank-imported in main.go) — the `pgx` stdlib driver registers the `"pgx"` database/sql name, so generated main.go calls `sql.Open("pgx", dsn)` for postgres.
+`github.com/a-h/templ`, `github.com/go-chi/chi/v5`, `github.com/gorilla/sessions`, `golang.org/x/crypto`. Plus `github.com/jackc/pgx/v5` (postgres, blank-imported in main.go), `modernc.org/sqlite v1.55.0` (sqlite, blank-imported in main.go — pure Go, no CGO, so sqlite dashboards cross-compile for Windows/Linux/macOS with `CGO_ENABLED=0`), and `github.com/microsoft/go-mssqldb v1.10.0` (mssql, blank-imported in main.go) — the `pgx` stdlib driver registers the `"pgx"` database/sql name, so generated main.go calls `sql.Open("pgx", dsn)` for postgres; sqlite uses `sql.Open("sqlite", dsn)`.
 
 The generated `go.mod` also declares `tool github.com/a-h/templ/cmd/templ` so `go tool templ generate` works without a manual templ install, and `generateMakefile()` emits a `Makefile` whose `build` target runs all steps (Tailwind via the standalone binary, tidy, templ, `go build -o <binary> .`) with no npm dependency.

@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/MichalHerstus/yaga/internal/types"
 )
@@ -23,7 +22,7 @@ import (
 // Params: dir (resource package directory), r (the resource definition).
 // Returns: an error on write failure.
 func (g *Generator) generateImportHandler(dir string, r types.Resource) error {
-	pkgName := strings.ToLower(r.Name)
+	pkgName := resourcePkgName(r.Name)
 	tName := tableName(r)
 	listPath := fmt.Sprintf("%s/%s", g.Config.Panel.Path, pkgName)
 

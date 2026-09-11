@@ -87,7 +87,7 @@ yaga.yaml ──► resource name ──► Go package / URL segment
 ### Drivers: postgres / sqlite (current) / mssql
 
 The driver comes from the first `connections:.*.driver` value in the YAML.
-Acceptable values: `postgres` (default when the key is absent), `sqlite`/`sqlite3`,
+Acceptable values: `postgres` (default when the key is absent), `sqlite`/`sqlite3` (both map to the pure-Go `modernc.org/sqlite` driver — no CGO, cross-compiles to Windows/Linux/macOS),
 `mssql`/`sqlserver`. **This project currently uses `sqlite`**, but the YAML
 and the generated code must stay driver-correct in case it changes.
 When you flip the driver, re-run `generate` (it rewrites `sql.Open`, placeholders,
@@ -97,7 +97,7 @@ new dialect — the generator does not translate hand-written SQL for you.
 | Concern | postgres | sqlite (current) | mssql |
 |---|---|---|---|
 | YAML `driver:` | `postgres` | `sqlite`/`sqlite3` | `mssql`/`sqlserver` |
-| `sql.Open` driver (main.go) | `pgx` | `sqlite3` | `mssql` |
+| `sql.Open` driver (main.go) | `pgx` | `sqlite` (via blank-imported `modernc.org/sqlite`) | `mssql` |
 | bind placeholders | `$1..$N` | `?` | `$1..$N` (loose `$N`→`@pN`) |
 | LIKE operator | `ILIKE` | `LIKE` | `LIKE` (case-insensitive collation) |
 | pagination | `LIMIT $1 OFFSET $2` | `LIMIT ? OFFSET ?` | `OFFSET $2 ROWS FETCH NEXT $1 ROWS ONLY` (REQUIRES an ORDER BY) |
@@ -105,7 +105,7 @@ new dialect — the generator does not translate hand-written SQL for you.
 | create-hook id capture | `RETURNING <id>` | `RETURNING <id>` | `OUTPUT INSERTED.<id>` |
 | stored procedures | `CALL name($1)` | not supported | `EXEC name $1` |
 | startup sanity check | `SELECT 1 FROM {table} LIMIT 1` | same | `SELECT TOP 1 1 FROM {table}` |
-| go.mod extra | `github.com/jackc/pgx/v5` | `github.com/mattn/go-sqlite3` | `github.com/microsoft/go-mssqldb` |
+| go.mod extra | `github.com/jackc/pgx/v5` | `github.com/modernc.org/sqlite` | `github.com/microsoft/go-mssqldb` |
 
 #### Postgres rules
 - Inline SQL (`query:`/`sql:`/widgets) uses `$N` placeholders, `ILIKE`, `LIMIT/OFFSET`.

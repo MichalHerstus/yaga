@@ -93,6 +93,9 @@ func ValidateAll(cfg *types.Config) []error {
 	if cfg.Panel.ID == "" {
 		cfg.Panel.ID = "admin"
 	}
+	if cfg.Panel.ID != "" && !isGoIdent(cfg.Panel.ID) {
+		add(warn("panel.id %q is not a valid Go identifier; generated identifiers will sanitize it (e.g. spaces become underscores)", cfg.Panel.ID))
+	}
 	if cfg.Panel.Layout.MaxContentWidth != "" && !inMaxWidths(cfg.Panel.Layout.MaxContentWidth) {
 		add(warn("panel.layout.max_content_width %q is not a supported width, falling back to \"none\"", cfg.Panel.Layout.MaxContentWidth))
 		cfg.Panel.Layout.MaxContentWidth = "none"
@@ -133,6 +136,9 @@ func ValidateAll(cfg *types.Config) []error {
 	for i, r := range cfg.Resources {
 		if r.Name == "" {
 			add(fmt.Errorf("resources[%d].name is required", i))
+		}
+		if r.Name != "" && !isGoIdent(r.Name) {
+			add(warn("resources[%d] name %q is not a valid Go identifier; generated package/dir names will sanitize it (e.g. spaces become underscores)", i, r.Name))
 		}
 		if r.Label == "" {
 			cfg.Resources[i].Label = r.Name
@@ -207,12 +213,33 @@ func ValidateAll(cfg *types.Config) []error {
 		if p.Name == "" {
 			add(fmt.Errorf("pages[%d].name is required", i))
 		}
+		if p.Name != "" && !isGoIdent(p.Name) {
+			add(warn("pages[%d] name %q is not a valid Go identifier; generated function names will sanitize it (e.g. spaces become underscores)", i, p.Name))
+		}
 		if p.Path == "" {
 			cfg.Pages[i].Path = "/" + p.Name
 		}
 		clampWidgetColumns(&cfg.Pages[i], i, add)
 	}
 	return errs
+}
+
+// isGoIdent reports whether s is already a valid Go identifier that can be
+// emitted verbatim into generated source (package names, type/function names).
+// Names that fail this check (spaces, punctuation, leading digits, empty) are
+// still safe — the generator sanitizes them via goIdent — but the editor warns
+// so authors know the raw name won't appear in generated code.
+func isGoIdent(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i, r := range s {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || r == '_' || (i > 0 && r >= '0' && r <= '9') {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 // clampColumns clamps a grid column count into the supported [1,12] range that

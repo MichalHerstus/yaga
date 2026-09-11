@@ -16,7 +16,7 @@ import (
 )
 
 // generateMain writes main.go for the generated app: it imports the driver
-// package (pgx stdlib for postgres, mattn/go-sqlite3 for sqlite, go-mssqldb
+// package (pgx stdlib for postgres, modernc.org/sqlite for sqlite, go-mssqldb
 // for mssql), opens the database connection resolved at runtime (see the DSN
 // resolution block), verifies the database is usable (Ping plus a sanity query
 // against the auth table) BEFORE binding the listen port, then serves on a
@@ -28,8 +28,8 @@ func (g *Generator) generateMain() error {
 	driverName := "postgres"
 	driverImport := fmt.Sprintf("_ %q", g.moduleImport("internal/data"))
 	if g.isSQLite() {
-		driverName = "sqlite3"
-		driverImport = `_ "github.com/mattn/go-sqlite3"`
+		driverName = "sqlite"
+		driverImport = `_ "modernc.org/sqlite"`
 	} else if g.isMSSQL() {
 		driverName = "mssql"
 		driverImport = `_ "github.com/microsoft/go-mssqldb"`

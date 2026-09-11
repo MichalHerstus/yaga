@@ -401,7 +401,7 @@ bodies) and `internal/panel/procs/procs.go` — `Exec(db, name, id) error` looks
 at call time, splits it with a tokenizer (`'…'` strings incl. `''` escapes, `"…"`/`[…]`
 identifiers, `--`/`/* */` comments) and runs each statement inside one transaction,
 draining result rows and rolling back on error; the id is bound only when the statement
-contains a `$N` placeholder (mattn errors when args exceed placeholders). Driver-aware
+contains a `$N` placeholder (modernc errors when args exceed placeholders). Driver-aware
 flips: `hookBlockEmits` is true for a declared proc on sqlite, `hookCallsStr` emits
 `procs.Exec(db, "<name>", scope.ID)`, `actionExecSQL`/bulk emit `procs.Exec(db, "<name>",
 id)`, and create gains `RETURNING <id>` capture for proc-only after-hooks. `procs` import
@@ -417,7 +417,7 @@ SQLite has no stored procedures; a "procedure stored in a table and run by the s
 engine" is a **named SQL-batch executor** — the body is read from a table at call time,
 split into statements, and executed inside one transaction. This gives `proc:` real
 semantics on sqlite (today it is a silent no-op: `procSQL` returns `""`, proc hooks/actions
-emit nothing). mattn/go-sqlite3 v1.14.24 facts that shape the design: `Exec`/`Query` only
+emit nothing). modernc.org/sqlite (formerly mattn/go-sqlite3) facts that shape the design: `Exec`/`Query` only
 run the **first** statement of a multi-statement string (no tail loop) → must split;
 `$1` binds positionally → the existing `$1` convention keeps working.
 
@@ -1682,7 +1682,7 @@ in-memory sqlite via `modernc.org/sqlite` (already a yaga dependency);
 `CREATE TABLE` from `cfg.Schema.Tables` with quoted identifiers, **no FK
 enforcement** (`PRAGMA foreign_keys` stays off, so row-copy order is irrelevant).
 The stub is **empty until asked**. `POST /api/sample-refresh` opens the first
-`connections[].dsn` (driver from `connections[].driver`; pgx / mattn /
+`connections[].dsn` (driver from `connections[].driver`; pgx / modernc.org/sqlite /
 go-mssqldb are all already yaga deps via `init --db`) and for each `schema:`
 table SELECTs **at most 100 rows** — postgres/sqlite `SELECT "c",… FROM "t" LIMIT
 100`, mssql `SELECT TOP 100 "c",… FROM "t"` — with the column list from the
@@ -1694,7 +1694,7 @@ endpoints never touch the live DB. No `connections:`/`schema:` or an unreachable
 DB → the stub stays empty. **Privacy:** the sample copies real row bytes (incl.
 password-hash columns) only into an in-memory DB — never persisted, never
 transmitted; the UI displays a note. **Spike item:** verify `modernc.org/sqlite`
-binds `$N` positionally like mattn (the generated app's driver); if not, map
+binds `$N` positionally (the generated app's driver, `modernc.org/sqlite`); if not, map
 numbered `$N` tokens to `?` in statement order via a token-aware pass (the
 inverse of `luascript.renumber`).
 

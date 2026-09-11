@@ -31,7 +31,7 @@ func (g *Generator) generateRouter() error {
 	importPaths = append(importPaths, fmt.Sprintf("%q", g.moduleImport("internal/viewmodels")))
 
 	for _, r := range g.Config.Resources {
-		name := strings.ToLower(r.Name)
+		name := resourcePkgName(r.Name)
 		importPaths = append(importPaths, fmt.Sprintf("%q", g.moduleImport("internal/panel/resources/"+name)))
 	}
 
@@ -73,7 +73,7 @@ func (g *Generator) generateRouter() error {
 `
 
 	for _, res := range g.Config.Resources {
-		name := strings.ToLower(res.Name)
+		name := resourcePkgName(res.Name)
 		rbacPrefix := func(action string) string {
 			if res.Policies != nil {
 				return fmt.Sprintf("r.With(auth.RBACMiddleware(%q, %q)).", name, action)
@@ -119,7 +119,7 @@ func (g *Generator) generateRouter() error {
 	}
 
 	for _, p := range g.Config.Pages {
-		capID := strings.ToUpper(g.Config.Panel.ID[:1]) + g.Config.Panel.ID[1:]
+		capID := capitalize(goIdent(g.Config.Panel.ID))
 		handlerName := fmt.Sprintf("pages.%s%s(db)", capID, pageIdent(p.Name))
 		if p.Default {
 			code += fmt.Sprintf("\t\tr.Get(\"/\", %s)\n", handlerName)
@@ -190,25 +190,10 @@ func flashHandler(next http.Handler) http.Handler {
 // Go/templ function names and file names. The raw name is preserved for display
 // (page heading, nav label); the identifier replaces each run of
 // whitespace/punctuation with a single underscore (e.g. "Order Management"
-// -> "Order_Management"). Names containing spaces are never emitted verbatim.
+// -> "Order_Management"). Names containing spaces or leading digits are never
+// emitted verbatim — see goIdent for the exact collapse rules.
 func pageIdent(name string) string {
-	var b strings.Builder
-	underscore := false
-	for _, r := range name {
-		if r == '_' || (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
-			if underscore && b.Len() > 0 {
-				b.WriteRune('_')
-			}
-			underscore = false
-			b.WriteRune(r)
-		} else {
-			underscore = true
-		}
-	}
-	if b.Len() == 0 {
-		return name
-	}
-	return b.String()
+	return goIdent(name)
 }
 
 // generatePage writes one page handler per configured Page. The handler
@@ -222,7 +207,7 @@ func (g *Generator) generatePage(p types.Page) error {
 	name := pageIdent(p.Name)
 	panelID := g.Config.Panel.ID
 	panelPath := g.Config.Panel.Path
-	capitalID := strings.ToUpper(panelID[:1]) + panelID[1:]
+	capitalID := capitalize(goIdent(panelID))
 	handlerName := capitalID + name
 	viewName := capitalID + name
 

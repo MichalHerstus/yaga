@@ -16,14 +16,11 @@ zachytí její schéma a přidává chování **navrch** — nenahrazuje dobrý 
 
 ### 1.1 Předpoklady — funkční Go toolchain
 
-| Nástroj | Potřebný pro | Poznámky |
+| Nástroj |Potřebný pro ||
 |---|---|---|
-| [Go](https://go.dev/dl/) 1.26+ | Spuštění yaga **i** sestavení vygenerovaného dashboardu | Nutná podmínka; viz 1.4 |
-| [Templ](https://templ.dev/) | Kompilace `.templ` šablon ve vygenerované aplikaci | Instalace ručně je volitelná — vygenerovaný `go.mod` deklaruje `tool github.com/a-h/templ/cmd/templ`, takže `go tool templ generate` funguje přes Go toolchain |
+| [Go](https://go.dev/dl/) 1.26+ | pro komplilace vygenerovaného dashboardu a instalaci YAGA ze zdrojových kódů |
 
-Není potřeba Node.js/npm, sqlc ani binární soubor Tailwind. Tailwind stylesheet je
-předem sestavený a uložený ve vygenerovaném projektu a Chart.js je zabudovaný do binárního
-souboru yaga — běžící dashboard **nepotřebuje internet za běhu**.
+Tailwind stylesheet a Chart.js jsou uloženy ve vygenerovaném projektu.
 
 ### 1.2 Instalace ze zdrojových kódů
 
@@ -54,14 +51,8 @@ yaga version          # např. yaga version 2.1.5
 
 Hotové binární soubory pro běžné kombinace OS/arch jsou publikovány na stránce
 [GitHub Releases](https://github.com/MichalHerstus/yaga/releases) projektu. Stáhněte
-archiv odpovídající vaší platformě (např. `yaga_2.1.5_darwin_arm64.tar.gz`), rozbalte ho a
-umístěte binární soubor `yaga` někam na svůj `PATH`:
+build odpovídající vaší platformě (např. `yaga-MacOS`).
 
-```sh
-tar xzf yaga_2.1.5_darwin_arm64.tar.gz
-sudo mv yaga /usr/local/bin/
-yaga version
-```
 
 > **Funkční instalace Go je stále povinná — i když používáte předem sestavený binární
 > soubor yaga.** yaga pouze *generuje* admin panel; neobsahuje překladač. Sestavení
@@ -278,6 +269,16 @@ go mod tidy
 go tool templ generate
 go build -o admin .
 ```
+
+Na **Windows** (bez `make`, bez gcc, bez CGO — sqlite ovladač je čistý Go) místo toho
+použijte generovaný `build.ps1`, který zrcadlí stejné cíle:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\build.ps1 build   # build | templ | tidy | run | package | clean
+```
+
+Cross-kompilace dashboardu pro Linux/Windows z jakéhokoli stroje:
+`CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -o admin.exe .`.
 
 ### 3.6 Spuštění a testování
 

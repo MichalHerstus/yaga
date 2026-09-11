@@ -25,7 +25,7 @@ import (
 // Params: dir (resource package directory), r (the resource definition).
 // Returns: an error if any handler file fails to write.
 func (g *Generator) generateResource(r types.Resource) error {
-	dir := filepath.Join(g.OutDir, "internal/panel/resources", strings.ToLower(r.Name))
+	dir := filepath.Join(g.OutDir, "internal/panel/resources", resourcePkgName(r.Name))
 
 	if r.List != nil {
 		if err := g.generateListHandler(dir, r); err != nil {
@@ -108,7 +108,7 @@ func loadChildLines(ctx context.Context, db *sql.DB, query string, parentID int6
     }
     return out
 }
-`, strings.ToLower(r.Name))
+`, resourcePkgName(r.Name))
 	return os.WriteFile(filepath.Join(dir, "childlines.go"), []byte(code), 0644)
 }
 
@@ -756,7 +756,7 @@ func (g *Generator) filterListCore(searchableColsLiteral, colPrefix, selectFrag,
 // Params: dir (resource package directory), r (the resource definition).
 // Returns: an error on write failure.
 func (g *Generator) generateListHandler(dir string, r types.Resource) error {
-	pkgName := strings.ToLower(r.Name)
+	pkgName := resourcePkgName(r.Name)
 	tName := tableName(r)
 
 	var searchCols []string
@@ -1076,7 +1076,7 @@ func List(db *sql.DB) http.HandlerFunc {
             CSRFToken: auth.CSRFToken(r, w),
 ` + filterVdFields + `        }
 
-        ` + fmt.Sprintf("layoutviews.Base(%q, %q, viewmodels.DefaultTheme(), auth.UserName(r), auth.CSRFToken(r, w), views.%sList(vd)).Render(r.Context(), w)", resourceTitle(r), g.Config.Panel.Path, r.Name) + `
+        ` + fmt.Sprintf("layoutviews.Base(%q, %q, viewmodels.DefaultTheme(), auth.UserName(r), auth.CSRFToken(r, w), views.%sList(vd)).Render(r.Context(), w)", resourceTitle(r), g.Config.Panel.Path, goIdent(r.Name)) + `
     }
 }
 `)
@@ -1109,8 +1109,8 @@ func scanFields(cols []string, withTotal bool) string {
 	scans = append(scans, `        item := make(map[string]interface{})`)
 	scans = append(scans, `        var scanArgs []interface{}`)
 	for _, c := range cols {
-		scans = append(scans, fmt.Sprintf(`        var val_%s interface{}`, c))
-		scans = append(scans, fmt.Sprintf(`        scanArgs = append(scanArgs, &val_%s)`, c))
+		scans = append(scans, fmt.Sprintf(`        var val_%s interface{}`, goIdent(c)))
+		scans = append(scans, fmt.Sprintf(`        scanArgs = append(scanArgs, &val_%s)`, goIdent(c)))
 	}
 	if withTotal {
 		scans = append(scans, `        var totalVal interface{}`)
@@ -1130,7 +1130,7 @@ func scanFields(cols []string, withTotal bool) string {
 		scans = append(scans, `        totalSet = true`)
 	}
 	for _, c := range cols {
-		scans = append(scans, fmt.Sprintf(`        item[%q] = val_%s`, c, c))
+		scans = append(scans, fmt.Sprintf(`        item[%q] = val_%s`, c, goIdent(c)))
 	}
 	return strings.Join(scans, "\n")
 }
@@ -1158,7 +1158,7 @@ func quoteList(words []string, prefix string) string {
 // Params: dir (resource package directory), r (the resource definition).
 // Returns: an error on write failure.
 func (g *Generator) generateCardHandler(dir string, r types.Resource) error {
-	pkgName := strings.ToLower(r.Name)
+	pkgName := resourcePkgName(r.Name)
 	tName := tableName(r)
 	card := r.Card
 	panelPath := g.Config.Panel.Path
@@ -1506,7 +1506,7 @@ func Cards(db *sql.DB) http.HandlerFunc {
 			}
 			return ""
 		}(),
-		resourceTitle(r), panelPath, r.Name)
+		resourceTitle(r), panelPath, goIdent(r.Name))
 
 	return os.WriteFile(filepath.Join(dir, "card.go"), []byte(code), 0644)
 }
@@ -1522,13 +1522,13 @@ func (g *Generator) computeRowCode(r types.Resource) string {
 		return ""
 	}
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "func compute%sRow(db *sql.DB, ctx context.Context, item map[string]interface{}, id %s) error {\n", r.Name, g.idGoTypeForResource(r))
+	fmt.Fprintf(&sb, "func compute%sRow(db *sql.DB, ctx context.Context, item map[string]interface{}, id %s) error {\n", goIdent(r.Name), g.idGoTypeForResource(r))
 	for _, c := range computed {
-		fmt.Fprintf(&sb, "    var val_%s interface{}\n", c.Name)
+		fmt.Fprintf(&sb, "    var val_%s interface{}\n", goIdent(c.Name))
 	}
 	var vars []string
 	for _, c := range computed {
-		vars = append(vars, "&val_"+c.Name)
+		vars = append(vars, "&val_"+goIdent(c.Name))
 	}
 	querySQL := "SELECT " + g.computedSelectItems(computed) +
 		" FROM " + g.quoteIdent(tableName(r)) +
@@ -1536,7 +1536,7 @@ func (g *Generator) computeRowCode(r types.Resource) string {
 	fmt.Fprintf(&sb, "    err := db.QueryRowContext(ctx, %s, id).Scan(%s)\n", strconv.Quote(querySQL), strings.Join(vars, ", "))
 	sb.WriteString("    if err != nil {\n        return err\n    }\n")
 	for _, c := range computed {
-		fmt.Fprintf(&sb, "    item[%q] = val_%s\n", c.Name, c.Name)
+		fmt.Fprintf(&sb, "    item[%q] = val_%s\n", c.Name, goIdent(c.Name))
 	}
 	sb.WriteString("    return nil\n}\n")
 	return sb.String()
@@ -1548,7 +1548,7 @@ func (g *Generator) computeRowCode(r types.Resource) string {
 // Params: dir (resource package directory), r (the resource definition).
 // Returns: an error on write failure.
 func (g *Generator) generateDetailHandler(dir string, r types.Resource) error {
-	pkgName := strings.ToLower(r.Name)
+	pkgName := resourcePkgName(r.Name)
 	queryName := r.Detail.Query
 	if queryName == "" {
 		queryName = "GetByID"
@@ -1632,7 +1632,7 @@ import (
 		childLines,
 		resourceTitle(r),
 		g.Config.Panel.Path,
-		r.Name)
+		goIdent(r.Name))
 
 	return os.WriteFile(filepath.Join(dir, "detail.go"), []byte(code), 0644)
 }
@@ -1710,7 +1710,7 @@ func (g *Generator) resourceHasPicker(r types.Resource) bool {
 // Params: dir (resource package directory), r (the resource definition).
 // Returns: an error on write failure.
 func (g *Generator) generateDeleteHandler(dir string, r types.Resource) error {
-	pkgName := strings.ToLower(r.Name)
+	pkgName := resourcePkgName(r.Name)
 	listPath := fmt.Sprintf("%s/%s", g.Config.Panel.Path, pkgName)
 	tName := tableName(r)
 
@@ -1812,7 +1812,7 @@ func Delete(db *sql.DB) http.HandlerFunc {
 // Params: dir (resource package directory), r (the resource definition).
 // Returns: an error on write failure.
 func (g *Generator) generateCSVHandler(dir string, r types.Resource) error {
-	pkgName := strings.ToLower(r.Name)
+	pkgName := resourcePkgName(r.Name)
 	tName := tableName(r)
 
 	exportCols := r.List.Columns
@@ -1985,7 +1985,7 @@ func bulkScriptBlock(listPath string, a types.Action, tName, indent string) stri
 // Params: dir (resource package directory), r (the resource definition).
 // Returns: an error on write failure.
 func (g *Generator) generateActionHandler(dir string, r types.Resource) error {
-	pkgName := strings.ToLower(r.Name)
+	pkgName := resourcePkgName(r.Name)
 	listPath := fmt.Sprintf("%s/%s", g.Config.Panel.Path, pkgName)
 	tName := tableName(r)
 
@@ -2129,7 +2129,7 @@ func Action(db *sql.DB) http.HandlerFunc {
 // Params: dir (resource package directory), r (the resource definition).
 // Returns: an error on write failure.
 func (g *Generator) generateBulkHandler(dir string, r types.Resource) error {
-	pkgName := strings.ToLower(r.Name)
+	pkgName := resourcePkgName(r.Name)
 	listPath := fmt.Sprintf("%s/%s", g.Config.Panel.Path, pkgName)
 
 	hasExec := false
@@ -2278,7 +2278,7 @@ func Bulk(db *sql.DB) http.HandlerFunc {
 // Params: dir (resource package directory), r (the resource definition).
 // Returns: an error on write failure.
 func (g *Generator) generateCreateHandler(dir string, r types.Resource) error {
-	pkgName := strings.ToLower(r.Name)
+	pkgName := resourcePkgName(r.Name)
 	listPath := fmt.Sprintf("%s/%s", g.Config.Panel.Path, pkgName)
 	tName := tableName(r)
 
@@ -2628,7 +2628,7 @@ func Create(db *sql.DB) http.HandlerFunc {
 		returnField,
 		resourceTitle(r),
 		g.Config.Panel.Path,
-		r.Name,
+		goIdent(r.Name),
 		formParseCode,
 		preInsertCode,
 		postCode,
@@ -2853,7 +2853,7 @@ func (g *Generator) childRels(r types.Resource) []childRel {
 		out = append(out, childRel{
 			heading:    heading,
 			resName:    cr.Name,
-			childLower: strings.ToLower(cr.Name),
+			childLower: resourcePkgName(cr.Name),
 			childTable: childTable,
 			childID:    idColumn(cr),
 			fkCol:      fkCol,
@@ -2913,7 +2913,7 @@ func (g *Generator) childLinesParts(r types.Resource, parentIDExpr, parentIDArg 
 	if len(rels) == 0 {
 		return "", "", false
 	}
-	parentLower := strings.ToLower(r.Name)
+	parentLower := resourcePkgName(r.Name)
 	panelPath := g.Config.Panel.Path
 	var loads []string
 	var parts []string
@@ -3068,7 +3068,7 @@ func colsLiteral(cols []string) string {
 // and loads dynamic select options. Returns an error on write failure.
 // Params: dir (resource package directory), r (the resource definition).
 func (g *Generator) generateUpdateHandler(dir string, r types.Resource) error {
-	pkgName := strings.ToLower(r.Name)
+	pkgName := resourcePkgName(r.Name)
 	listPath := fmt.Sprintf("%s/%s", g.Config.Panel.Path, pkgName)
 	tName := tableName(r)
 	populateQuery := r.Form.Update.PopulateQuery
@@ -3346,7 +3346,7 @@ func Update(db *sql.DB) http.HandlerFunc {
 		returnField,
 		resourceTitle(r),
 		g.Config.Panel.Path,
-		r.Name,
+		goIdent(r.Name),
 		formParseCode,
 		postCode,
 		redirectRet,

@@ -88,7 +88,7 @@ func RBACMiddleware(resource string, action string) func(http.Handler) http.Hand
 			if res.Policies == nil {
 				continue
 			}
-			resLower := strings.ToLower(res.Name)
+resLower := resourcePkgName(res.Name)
 			p := res.Policies
 			if p.ViewAny != "" {
 				rbacMiddleware += fmt.Sprintf(`

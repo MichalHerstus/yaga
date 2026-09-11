@@ -100,7 +100,7 @@ func (g *Generator) generateViews() error {
 // Params: r (the resource definition).
 // Returns: an error if any templ file fails to write.
 func (g *Generator) generateResourceViews(r types.Resource) error {
-	viewDir := filepath.Join(g.OutDir, "internal/views/resources", strings.ToLower(r.Name))
+	viewDir := filepath.Join(g.OutDir, "internal/views/resources", resourcePkgName(r.Name))
 	if err := os.WriteFile(filepath.Join(viewDir, "renderers.templ"), []byte(prefixImports(renderersSource(), g.moduleImport("internal/viewmodels"))), 0644); err != nil {
 		return err
 	}
@@ -175,9 +175,9 @@ func renderCell(fieldType, expr string) string {
 func (g *Generator) generateListTempl(dir string, r types.Resource) error {
 	cols := append([]types.Column{}, r.List.Columns...)
 	cols = append(cols, computedColumns(r.List.Computed)...)
-	templName := r.Name + "List"
+	templName := goIdent(r.Name) + "List"
 	resLabel := r.Label
-	resLower := strings.ToLower(r.Name)
+	resLower := resourcePkgName(r.Name)
 	panelPath := g.Config.Panel.Path
 	idCol := idColumn(r)
 
@@ -424,8 +424,8 @@ templ %s(data *viewmodels.ListData) {
 // Returns: an error on write failure.
 func (g *Generator) generateDetailTempl(dir string, r types.Resource) error {
 	resName := r.Name
-	templName := resName + "Detail"
-	resLower := strings.ToLower(resName)
+	templName := goIdent(resName) + "Detail"
+	resLower := resourcePkgName(resName)
 	idCol := idColumn(r)
 	panelPath := g.Config.Panel.Path
 
@@ -543,9 +543,9 @@ func actionColor(c string) string {
 // Params: dir (view directory), r (the resource definition).
 // Returns: an error on write failure.
 func (g *Generator) generateFormTempl(dir string, r types.Resource) error {
-	templName := r.Name + "Form"
+	templName := goIdent(r.Name) + "Form"
 	resLabel := r.Label
-	resLower := strings.ToLower(r.Name)
+	resLower := resourcePkgName(r.Name)
 	panelPath := g.Config.Panel.Path
 
 	both := r.Form.Create != nil && r.Form.Update != nil
@@ -1042,9 +1042,9 @@ func pickerFooter() string {
 func (g *Generator) generateCardTempl(dir string, r types.Resource) error {
 	fields := append([]types.Field{}, r.Card.Fields...)
 	fields = append(fields, computedFields(r.Card.Computed)...)
-	templName := r.Name + "Cards"
+	templName := goIdent(r.Name) + "Cards"
 	resLabel := r.Label
-	resLower := strings.ToLower(r.Name)
+	resLower := resourcePkgName(r.Name)
 	panelPath := g.Config.Panel.Path
 	idCol := idColumn(r)
 
@@ -1350,7 +1350,7 @@ func (g *Generator) generatePageViews(p types.Page) error {
 	viewDir := filepath.Join(g.OutDir, "internal/views/pages")
 	panelID := g.Config.Panel.ID
 
-	capitalID := strings.ToUpper(panelID[:1]) + panelID[1:]
+	capitalID := capitalize(goIdent(panelID))
 	templName := capitalID + pageIdent(p.Name)
 	code := fmt.Sprintf(`package views
 
@@ -1410,7 +1410,7 @@ func (g *Generator) generateLayoutViews() error {
 			if item.Resource != "" {
 				label := item.Resource
 				sidebarNav.WriteString(fmt.Sprintf(`            <a href="%s/%s" class="block px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-brand-primary/10 hover:text-brand-primary mx-2 rounded-md">%s</a>
-`, panelPath, strings.ToLower(item.Resource), label))
+`, panelPath, resourcePkgName(item.Resource), label))
 			}
 			if item.Page != "" {
 				pagePath := item.Page

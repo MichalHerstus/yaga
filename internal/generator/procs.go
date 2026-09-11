@@ -269,9 +269,10 @@ func splitStatements(sql string) []string {
 
 // containsPlaceholder reports whether a SQL statement contains a numbered
 // placeholder ($1, $2, ...) outside of string literals, quoted identifiers and
-// comments. mattn/go-sqlite3 binds $N positionally but errors when more
-// arguments are passed than the statement has placeholders, so the generated
-// procs executor only binds the record id for statements that reference it.
+// comments. The sqlite drivers (modernc.org/sqlite and mattn/go-sqlite3) bind
+// $N positionally but error when more arguments are passed than the statement
+// has placeholders, so the generated procs executor only binds the record id
+// for statements that reference it.
 func containsPlaceholder(sql string) bool {
 	i, n := 0, len(sql)
 	for i < n {

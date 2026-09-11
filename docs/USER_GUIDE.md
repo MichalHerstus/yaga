@@ -280,6 +280,16 @@ go tool templ generate
 go build -o admin .
 ```
 
+On **Windows** (no `make`, no gcc, no CGO — the sqlite driver is pure Go) run the generated
+`build.ps1` instead, which mirrors the same targets:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\build.ps1 build   # build | templ | tidy | run | package | clean
+```
+
+Cross-compile a Linux/Windows dashboard from any machine with
+`CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -o admin.exe .`.
+
 ### 3.6 Run and test
 
 ```bash

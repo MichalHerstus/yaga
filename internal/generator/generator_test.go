@@ -2859,3 +2859,210 @@ func TestGenerateMasterChildren(t *testing.T) {
 		t.Errorf("order detail.templ must render the lines sections\n--- generated:\n%s", detailView)
 	}
 }
+
+// spaceyConfig returns a config whose names are NOT valid Go identifiers —
+// "Order Management" (resource), "order panel" (panel id), "Sales by Region"
+// (page) and a spacey list column ("size range") — so every identifier splice
+// site must sanitize or the generated Go fails to parse. Uses mssql so the
+// driver branches (EXEC / ORDER BY fallback) are exercised alongside the
+// scripting- and filter-free path.
+func spaceyConfig() *types.Config {
+	return &types.Config{
+		Version: "1",
+		Panel: types.Panel{
+			ID:   "order panel",
+			Path: "/order",
+			Name: "Order Panel",
+		},
+		Connections: map[string]types.Connection{
+			"default": {Driver: "mssql", DSN: "sqlserver://sa:pw@host:1433"},
+		},
+		Navigation: []types.NavigationGroup{
+			{Group: "Orders", Items: []types.NavigationItem{{Resource: "Order Management", Label: "Order Management"}}},
+			{Group: "Reports", Items: []types.NavigationItem{{Page: "Sales by Region", Label: "Sales by Region"}}},
+		},
+		Resources: []types.Resource{
+			{
+				Name:  "Order Management",
+				Label: "Order Management",
+				List: &types.ListConfig{
+					Columns: []types.Column{
+						{Name: "id", Type: "integer"},
+						{Name: "size range", Label: "Size range", Type: "string"},
+					},
+					Export:  []string{"size range"},
+					Computed: []types.ComputedField{{Name: "gross total", Label: "Gross total", Type: "float", Expression: "price * qty"}},
+				},
+				Card: &types.CardConfig{
+					Columns: 3,
+					Rows:    2,
+					Fields:  []types.Field{{Name: "size range", Type: "string"}},
+				},
+				Detail: &types.DetailConfig{
+					Fields: []types.Field{
+						{Name: "id", Type: "integer"},
+						{Name: "size range", Type: "string"},
+					},
+				},
+				Form: &types.FormConfig{
+					Create: &types.FormAction{
+						Fields: []types.Field{{Name: "size range", Type: "string"}},
+					},
+					Update: &types.FormAction{
+						Fields: []types.Field{{Name: "size range", Type: "string"}},
+					},
+					Delete: &types.FormAction{},
+				},
+				Actions: []types.Action{
+					{Name: "mark done", Query: "UPDATE t SET status='done' WHERE id=$1", Bulk: true},
+				},
+				Policies: &types.Policy{ViewAny: "admin|manager"},
+				ImportCSV: true,
+			},
+		},
+		Pages: []types.Page{
+			{Name: "Sales by Region", Path: "/sales-region"},
+		},
+	}
+}
+
+// TestGenerateIdentifiers drives generation with names that are not valid Go
+// identifiers and asserts the whole tree still parses. This guards the Windows
+// panic-class bug (spacey names produced `package Order Management` / `Order
+// ManagementList` and broke the build on every OS).
+func TestGenerateIdentifiers(t *testing.T) {
+	dir := t.TempDir()
+	g := New(spaceyConfig(), dir)
+	if err := g.Generate(); err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	assertGeneratedGoParses(t, dir)
+
+	// Resource package + view directories are sanitized (lowercased, spaces -> _).
+	for _, sub := range []string{
+		filepath.Join(dir, "internal/panel/resources", "order_management"),
+		filepath.Join(dir, "internal/views/resources", "order_management"),
+	} {
+		if _, err := os.Stat(sub); err != nil {
+			t.Errorf("expected sanitized dir %s: %v", sub, err)
+		}
+	}
+
+	// Sanitized identifiers appear everywhere the raw name used to be spliced.
+	checks := []struct {
+		file string
+		want string
+	}{
+		{filepath.Join(dir, "internal/panel", "router.go"), `package panel`},
+		{filepath.Join(dir, "internal/panel/resources/order_management", "list.go"), `package order_management`},
+		{filepath.Join(dir, "internal/panel/resources/order_management", "list.go"), `Order_ManagementList(`},
+		{filepath.Join(dir, "internal/panel", "router.go"), `/order_management`},
+		{filepath.Join(dir, "internal/panel", "router.go"), `auth.RBACMiddleware("order_management", "view_any")`},
+	}
+	for _, c := range checks {
+		data, err := os.ReadFile(c.file)
+		if err != nil {
+			t.Fatalf("read %s: %v", c.file, err)
+		}
+		if !strings.Contains(string(data), c.want) {
+			t.Errorf("%s missing %q\n--- generated:\n%s", c.file, c.want, data)
+		}
+	}
+
+	// RBAC resource strings must match the sanitized route segment the router
+	// passes to the middleware, or authorization silently never matches.
+	mw, err := os.ReadFile(filepath.Join(dir, "internal/panel/auth", "middleware.go"))
+	if err != nil {
+		t.Fatalf("read middleware.go: %v", err)
+	}
+	if strings.Contains(string(mw), "Order Management") {
+		t.Errorf("RBAC middleware must compare sanitized resource names, got raw spaces\n--- generated:\n%s", mw)
+	}
+	if !strings.Contains(string(mw), `resource == "order_management"`) {
+		t.Errorf("RBAC middleware missing sanitized resource check\n--- generated:\n%s", mw)
+	}
+
+	// The sidebar nav href uses the sanitized route segment.
+	base, err := os.ReadFile(filepath.Join(dir, "internal/views/layout", "base.templ"))
+	if err == nil && strings.Contains(string(base), "/order/Order Management") {
+		t.Errorf("nav href leaks the raw resource name\n--- generated:\n%s", base)
+	}
+}
+
+// TestGenerateSQLiteDriver guards the modernc.org/sqlite switch: the generated
+// app opens "sqlite" (registered by modernc) with a blank CGO-free import, and
+// go.mod declares modernc.org/sqlite — never mattn/go-sqlite3 (which requires
+// a C toolchain and broke cross-platform builds).
+func TestGenerateSQLiteDriver(t *testing.T) {
+	cfg := procConfig("sqlite")
+	cfg.Procedures = []types.Procedure{{Name: "sp_archive_user", Description: "archive", SQL: "UPDATE users SET status='inactive' WHERE id = $1;"}}
+	dir := t.TempDir()
+	g := New(cfg, dir)
+	if err := g.Generate(); err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	assertGeneratedGoParses(t, dir)
+
+	mainB, err := os.ReadFile(filepath.Join(dir, "main.go"))
+	if err != nil {
+		t.Fatalf("read main.go: %v", err)
+	}
+	mainStr := string(mainB)
+	if !strings.Contains(mainStr, `_ "modernc.org/sqlite"`) {
+		t.Errorf("main.go must blank-import modernc.org/sqlite\n--- generated:\n%s", mainStr)
+	}
+	if !strings.Contains(mainStr, `sql.Open("sqlite", dsn)`) {
+		t.Errorf("main.go must sql.Open the modernc driver name \"sqlite\"\n--- generated:\n%s", mainStr)
+	}
+	if strings.Contains(mainStr, "sqlite3") || strings.Contains(mainStr, "mattn") {
+		t.Errorf("main.go must not reference the mattn sqlite3 driver\n--- generated:\n%s", mainStr)
+	}
+
+	gomod, err := os.ReadFile(filepath.Join(dir, "go.mod"))
+	if err != nil {
+		t.Fatalf("read go.mod: %v", err)
+	}
+	gomodStr := string(gomod)
+	if !strings.Contains(gomodStr, "modernc.org/sqlite") {
+		t.Errorf("go.mod must require modernc.org/sqlite\n--- generated:\n%s", gomodStr)
+	}
+	if strings.Contains(gomodStr, "mattn/go-sqlite3") {
+		t.Errorf("go.mod must not require mattn/go-sqlite3\n--- generated:\n%s", gomodStr)
+	}
+}
+
+// TestGenerateBuildScriptWindows guards the Windows build fixing: every
+// generated project carries a build.ps1 mirroring the Makefile targets, and
+// the script stays free of the Unix-only commands the Makefile depends on.
+func TestGenerateBuildScriptWindows(t *testing.T) {
+	dir := t.TempDir()
+	g := New(auditConfig(), dir)
+	if err := g.Generate(); err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+
+	ps, err := os.ReadFile(filepath.Join(dir, "build.ps1"))
+	if err != nil {
+		t.Fatalf("read build.ps1: %v", err)
+	}
+	psStr := string(ps)
+	if _, err := os.Stat(filepath.Join(dir, "Makefile")); err != nil {
+		t.Errorf("Makefile must still be generated alongside build.ps1: %v", err)
+	}
+	for _, want := range []string{
+		"powershell -ExecutionPolicy Bypass -File",
+		"[string]$Binary = ",
+		"Invoke-Step \"go tool templ generate\"",
+		"Invoke-Step \"go build -o $Binary.exe .\"",
+		"Invoke-Step \"& .\\\\$Binary.exe --port $Port --log $Log\"",
+		"tar.exe -czf",
+		"Remove-Item",
+	} {
+		if !strings.Contains(psStr, want) {
+			t.Errorf("build.ps1 missing %q\n--- generated:\n%s", want, psStr)
+		}
+	}
+	if strings.Contains(psStr, "rm -rf") || strings.Contains(psStr, "./") || strings.Contains(psStr, "tar czf") {
+		t.Errorf("build.ps1 must not contain Unix-only shell commands\n--- generated:\n%s", psStr)
+	}
+}
