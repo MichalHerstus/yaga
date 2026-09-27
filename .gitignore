@@ -1,4 +1,6 @@
 /yaga
+/yaga.yaml
+dist/
 admin/
 .vscode/
 .idea/
