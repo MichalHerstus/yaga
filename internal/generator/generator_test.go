@@ -1082,6 +1082,50 @@ func TestGenerateEnvFile(t *testing.T) {
 	}
 }
 
+// TestGenerateEnvFileSQLiteRelative verifies that a relative SQLite file DSN in
+// the source config is written into .ENV as an absolute path (resolved against
+// the config directory), so `make run` from the output dir finds the database
+// instead of attempting to create it in a non-existent subdirectory (the
+// "unable to open database file (14)" failure). In-memory and already-absolute
+// DSNs must be left untouched.
+func TestGenerateEnvFileSQLiteRelative(t *testing.T) {
+	cases := []struct {
+		name      string
+		dsn       string
+		configDir string
+		want      string
+	}{
+		{"relative", "./sqlite-demo-db/db.sqlite", "/projects/app", "/projects/app/sqlite-demo-db/db.sqlite"},
+		{"plain file", "data.db", "/projects/app", "/projects/app/data.db"},
+		{"file uri", "file:./data/admin.db?cache=shared", "/projects/app", "file:/projects/app/data/admin.db?cache=shared"},
+		{"absolute", "/var/data/db.sqlite", "/projects/app", "/var/data/db.sqlite"},
+		{"memory", ":memory:", "/projects/app", ":memory:"},
+		{"file memory", "file::memory:?cache=shared", "/projects/app", "file::memory:?cache=shared"},
+		{"named memory", "file:memdb1?mode=memory&cache=shared", "/projects/app", "file:memdb1?mode=memory&cache=shared"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := hookConfig()
+			cfg.Connections = map[string]types.Connection{
+				"default": {Driver: "sqlite", DSN: tc.dsn},
+			}
+			dir := t.TempDir()
+			g := New(cfg, dir)
+			g.ConfigDir = tc.configDir
+			if err := g.Generate(); err != nil {
+				t.Fatalf("generate: %v", err)
+			}
+			data, err := os.ReadFile(filepath.Join(dir, ".ENV"))
+			if err != nil {
+				t.Fatalf("read .ENV: %v", err)
+			}
+			if !strings.Contains(string(data), "DATABASE_URL="+tc.want+"\n") {
+				t.Errorf(".ENV DATABASE_URL = %q, want %q", strings.TrimSpace(string(data)), tc.want)
+			}
+		})
+	}
+}
+
 // TestMainGeneratedFlags ensures the generated main.go registers short flag
 // aliases (--port/-p, --log/-l) and a --help/-h path that prints the command
 // line syntax and exits before touching the database.
@@ -1223,11 +1267,11 @@ func TestGenerateUploadValidation(t *testing.T) {
 	}
 	assertGeneratedGoParses(t, dir)
 
-	create, err := os.ReadFile(filepath.Join(dir, "internal/panel/resources/user", "create.go"))
+	upload, err := os.ReadFile(filepath.Join(dir, "internal/panel/resources/user", "upload.go"))
 	if err != nil {
-		t.Fatalf("read create.go: %v", err)
+		t.Fatalf("read upload.go: %v", err)
 	}
-	createStr := string(create)
+	uploadStr := string(upload)
 	for _, want := range []string{
 		`func saveUploadedFile(r *http.Request, fieldName string) string {`,
 		`strings.ToLower(filepath.Ext(header.Filename))`,
@@ -1238,14 +1282,65 @@ func TestGenerateUploadValidation(t *testing.T) {
 		`file.Seek(0, io.SeekStart)`,
 		`var safeUploadExts = map[string]bool{`,
 	} {
-		if !strings.Contains(createStr, want) {
-			t.Errorf("create.go missing %q", want)
+		if !strings.Contains(uploadStr, want) {
+			t.Errorf("upload.go missing %q", want)
 		}
 	}
 	for _, notWant := range []string{`".html": true`, `".svg": true`, `".php": true`} {
-		if strings.Contains(createStr, notWant) {
-			t.Errorf("create.go must not whitelist %q", notWant)
+		if strings.Contains(uploadStr, notWant) {
+			t.Errorf("upload.go must not whitelist %q", notWant)
 		}
+	}
+}
+
+// TestGenerateUploadHelperShared guards BUG: a resource with a file/image field
+// in BOTH the create and update forms (the common introspection output) used to
+// emit saveUploadedFile/safeUploadExts/safeUploadExt into both create.go and
+// update.go, redeclaring them in the same package and breaking `go build`. The
+// helper now lives once in the package-scoped upload.go.
+func TestGenerateUploadHelperShared(t *testing.T) {
+	dir := t.TempDir()
+	cfg := &types.Config{
+		Version: "1",
+		Panel:   types.Panel{ID: "admin", Path: "/admin", Name: "Admin"},
+		Resources: []types.Resource{
+			{
+				Name: "Employee",
+				Form: &types.FormConfig{
+					Create: &types.FormAction{Fields: []types.Field{
+						{Name: "name", Type: "text"},
+						{Name: "photo", Type: "image"},
+					}},
+					Update: &types.FormAction{Fields: []types.Field{
+						{Name: "name", Type: "text"},
+						{Name: "photo", Type: "image"},
+					}},
+				},
+			},
+		},
+	}
+	g := New(cfg, dir)
+	if err := g.Generate(); err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	assertGeneratedGoParses(t, dir)
+
+	resDir := filepath.Join(dir, "internal/panel/resources/employee")
+	count := 0
+	for _, f := range []string{"create.go", "update.go", "upload.go"} {
+		data, err := os.ReadFile(filepath.Join(resDir, f))
+		if err != nil {
+			t.Fatalf("read %s: %v", f, err)
+		}
+		if strings.Contains(string(data), "func saveUploadedFile(") {
+			count++
+			if f != "upload.go" {
+				t.Errorf("saveUploadedFile must only be declared in upload.go, found in %s", f)
+			}
+		}
+	}
+	if count != 1 {
+		t.Errorf("saveUploadedFile declared %d times across the package, want exactly 1", count)
 	}
 }
 

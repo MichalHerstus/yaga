@@ -758,31 +758,49 @@ func ensureAuthTables(db *sql.DB, driver string, tables []TableInfo) error {
 	return nil
 }
 
-// insertAdminUser inserts a default admin user into the users table if it is
-// empty. Credentials: admin@admin.test / password (an empty password makes the
-// caller generate and print a random one). Returns whether a user was inserted.
-func insertAdminUser(db *sql.DB, driver, password string) (bool, error) {
+// ensureAdminUser guarantees an admin login (admin@admin.test) exists.
+// When the users table is empty it inserts the admin with the given password.
+// When it already holds rows and reset is true (i.e. the caller passed an
+// explicit --admin-password) it updates that account's password instead of
+// silently ignoring the flag — the previous behaviour left operators who
+// re-ran init with --admin-password unable to log in. With reset false an
+// existing user set is left untouched. If no admin@admin.test row is found on
+// the reset path a new one is inserted.
+// Returns inserted (a new admin row was created), updated (an existing admin
+// row's password was changed) and any error.
+func ensureAdminUser(db *sql.DB, driver, password string, reset bool) (inserted, updated bool, err error) {
 	var count int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM users`).Scan(&count); err != nil {
-		return false, fmt.Errorf("counting users: %w", err)
+		return false, false, fmt.Errorf("counting users: %w", err)
 	}
-	if count > 0 {
-		return false, nil
+	if count > 0 && !reset {
+		return false, false, nil
 	}
 
 	hash, err := bcryptHash(password)
 	if err != nil {
-		return false, fmt.Errorf("hashing admin password: %w", err)
+		return false, false, fmt.Errorf("hashing admin password: %w", err)
+	}
+
+	if count > 0 {
+		var res sql.Result
+		if driver == "postgres" {
+			res, err = db.Exec(`UPDATE users SET password = $1 WHERE email = $2`, hash, "admin@admin.test")
+		} else {
+			res, err = db.Exec(`UPDATE users SET password = ? WHERE email = ?`, hash, "admin@admin.test")
+		}
+		if err != nil {
+			return false, false, fmt.Errorf("updating admin password: %w", err)
+		}
+		if n, _ := res.RowsAffected(); n > 0 {
+			return false, true, nil
+		}
+		// No admin@admin.test row: fall through and insert one.
 	}
 
 	var adminRoleID int
-	if driver == "postgres" {
-		err = db.QueryRow(`SELECT id FROM roles WHERE name = 'admin'`).Scan(&adminRoleID)
-	} else {
-		err = db.QueryRow(`SELECT id FROM roles WHERE name = 'admin'`).Scan(&adminRoleID)
-	}
-	if err != nil {
-		return false, fmt.Errorf("finding admin role: %w", err)
+	if err := db.QueryRow(`SELECT id FROM roles WHERE name = 'admin'`).Scan(&adminRoleID); err != nil {
+		return false, false, fmt.Errorf("finding admin role: %w", err)
 	}
 
 	if driver == "postgres" {
@@ -797,9 +815,39 @@ func insertAdminUser(db *sql.DB, driver, password string) (bool, error) {
 			"Admin User", "admin@admin.test", hash, adminRoleID, "admin", "active")
 	}
 	if err != nil {
-		return false, fmt.Errorf("inserting admin user: %w", err)
+		return false, false, fmt.Errorf("inserting admin user: %w", err)
 	}
-	return true, nil
+	return true, false, nil
+}
+
+// adminBootstrapMessage returns the console lines to print after the auth
+// tables are ensured and the admin user is (maybe) inserted or updated. The
+// admin credentials are printed whenever a row was inserted or its password
+// changed — not only when the tables were freshly created — because the
+// password is either the one-time random value generated here or the explicit
+// --admin-password, and neither is stored in plaintext. A database that
+// already ships with seeded roles and an empty users table (e.g. a demo
+// database) previously inserted the admin silently, leaving the operator with
+// no way to learn the generated password.
+// Params: createdTables (whether users/roles were created this run), inserted
+// (whether an admin row was inserted), updated (whether an existing admin
+// row's password was changed), password (the effective admin password).
+// Returns: the lines to print (empty when nothing was done).
+func adminBootstrapMessage(createdTables, inserted, updated bool, password string) []string {
+	var lines []string
+	if createdTables {
+		lines = append(lines, "Created auth tables (users, roles).")
+	}
+	if inserted {
+		lines = append(lines, "Seeded admin user.")
+	}
+	if updated {
+		lines = append(lines, "Updated admin password.")
+	}
+	if inserted || updated {
+		lines = append(lines, fmt.Sprintf("Admin login: admin@admin.test / %s", password))
+	}
+	return lines
 }
 
 // bcryptHash produces a bcrypt hash of the given plaintext password.
@@ -1242,16 +1290,13 @@ func cmdInitFromDB(configPath, outDir, dsn, adminPassword string, force, updateM
 	if adminPass == "" {
 		adminPass = randomPassword()
 	}
-	inserted, err := insertAdminUser(db, driver, adminPass)
+	inserted, updated, err := ensureAdminUser(db, driver, adminPass, adminPassword != "")
 	if err != nil {
-		return fmt.Errorf("inserting admin user: %w", err)
+		return fmt.Errorf("ensuring admin user: %w", err)
 	}
 
-	if !hasRoles || !hasUsers {
-		fmt.Println("Created auth tables (users, roles) and seeded admin user.")
-		if inserted {
-			fmt.Printf("Admin login: admin@admin.test / %s\n", adminPass)
-		}
+	for _, line := range adminBootstrapMessage(!hasRoles || !hasUsers, inserted, updated, adminPass) {
+		fmt.Println(line)
 	}
 
 	// Re-introspect after creating auth tables so the full schema is available
@@ -1831,8 +1876,8 @@ func updateConnectionDSN(root *yaml.Node, dsn string) {
 	if dsi >= 0 {
 		def.Content[dsi+1].Value = dsn
 	} else {
-def.Content = append(def.Content,
-		&yaml.Node{Kind: yaml.ScalarNode, Value: "dsn"},
-		&yaml.Node{Kind: yaml.ScalarNode, Value: dsn})
+		def.Content = append(def.Content,
+			&yaml.Node{Kind: yaml.ScalarNode, Value: "dsn"},
+			&yaml.Node{Kind: yaml.ScalarNode, Value: dsn})
 	}
 }

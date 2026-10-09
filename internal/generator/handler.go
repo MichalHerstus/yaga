@@ -69,7 +69,103 @@ func (g *Generator) generateResource(r types.Resource) error {
 			return err
 		}
 	}
+	// The saveUploadedFile helper is package-scoped too: emitting it in both
+	// create.go and update.go redeclares it when a resource has file/image
+	// fields in both forms (the common introspection output), so it lives in a
+	// single shared upload.go.
+	if resourceHasFile(r) {
+		if err := g.generateUploadHelper(dir, r); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+// resourceHasFile reports whether any create or update form field of the
+// resource is a file/image upload. Such resources need the shared
+// saveUploadedFile helper emitted once per package (upload.go).
+// Params: r (the resource definition).
+// Returns: true when a file/image field exists.
+func resourceHasFile(r types.Resource) bool {
+	if r.Form == nil {
+		return false
+	}
+	for _, fa := range []*types.FormAction{r.Form.Create, r.Form.Update} {
+		if fa == nil {
+			continue
+		}
+		for _, f := range fa.Fields {
+			if f.Type == "file" || f.Type == "image" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// generateUploadHelper writes upload.go with the package-level saveUploadedFile
+// helper plus its extension/content-type allow-list, shared by create.go and
+// update.go (D14 pattern: one package-scoped definition, never duplicated).
+// Params: dir (resource package directory), r (the resource definition).
+// Returns: an error on write failure.
+func (g *Generator) generateUploadHelper(dir string, r types.Resource) error {
+	code := fmt.Sprintf(`package %s
+
+import (
+    "fmt"
+    "io"
+    "net/http"
+    "os"
+    "path/filepath"
+    "strings"
+    "time"
+)
+
+func saveUploadedFile(r *http.Request, fieldName string) string {
+    file, header, err := r.FormFile(fieldName)
+    if err != nil {
+        return ""
+    }
+    defer file.Close()
+
+    ext := strings.ToLower(filepath.Ext(header.Filename))
+    if !safeUploadExt(ext) {
+        return ""
+    }
+
+    head := make([]byte, 512)
+    n, _ := io.ReadFull(file, head)
+    detected := http.DetectContentType(head[:n])
+    if n > 0 && (detected == "text/html" || detected == "image/svg+xml") {
+        return ""
+    }
+    if _, err := file.Seek(0, io.SeekStart); err != nil {
+        return ""
+    }
+
+    dir := "static/uploads/" + fieldName
+    os.MkdirAll(dir, 0755)
+    outPath := dir + "/" + fmt.Sprintf("%%d%%s", time.Now().UnixNano(), ext)
+    out, err := os.Create(outPath)
+    if err != nil {
+        return ""
+    }
+    defer out.Close()
+    io.Copy(out, file)
+    return "/" + outPath
+}
+
+var safeUploadExts = map[string]bool{
+    ".png": true, ".jpg": true, ".jpeg": true, ".gif": true, ".webp": true,
+    ".pdf": true, ".txt": true, ".csv": true, ".zip": true,
+    ".doc": true, ".docx": true, ".xls": true, ".xlsx": true,
+}
+
+func safeUploadExt(ext string) bool {
+    return safeUploadExts[ext]
+}
+`, resourcePkgName(r.Name))
+	return os.WriteFile(filepath.Join(dir, "upload.go"), []byte(code), 0644)
 }
 
 // generateChildLinesHelper writes childlines.go with the package-level
@@ -2383,61 +2479,6 @@ func (g *Generator) generateCreateHandler(dir string, r types.Resource) error {
 		luaImport = g.luaImport()
 	}
 
-	fileImport := ""
-	uploadHelper := ""
-	if hasFile {
-		fileImport = `    "io"
-    "os"
-    "path/filepath"
-    "time"
-`
-		uploadHelper = `
-func saveUploadedFile(r *http.Request, fieldName string) string {
-    file, header, err := r.FormFile(fieldName)
-    if err != nil {
-        return ""
-    }
-    defer file.Close()
-
-    ext := strings.ToLower(filepath.Ext(header.Filename))
-    if !safeUploadExt(ext) {
-        return ""
-    }
-
-    head := make([]byte, 512)
-    n, _ := io.ReadFull(file, head)
-    detected := http.DetectContentType(head[:n])
-    if n > 0 && (detected == "text/html" || detected == "image/svg+xml") {
-        return ""
-    }
-    if _, err := file.Seek(0, io.SeekStart); err != nil {
-        return ""
-    }
-
-    dir := "static/uploads/" + fieldName
-    os.MkdirAll(dir, 0755)
-    outPath := dir + "/" + fmt.Sprintf("%d%s", time.Now().UnixNano(), ext)
-    out, err := os.Create(outPath)
-    if err != nil {
-        return ""
-    }
-    defer out.Close()
-    io.Copy(out, file)
-    return "/" + outPath
-}
-
-var safeUploadExts = map[string]bool{
-    ".png": true, ".jpg": true, ".jpeg": true, ".gif": true, ".webp": true,
-    ".pdf": true, ".txt": true, ".csv": true, ".zip": true,
-    ".doc": true, ".docx": true, ".xls": true, ".xlsx": true,
-}
-
-func safeUploadExt(ext string) bool {
-    return safeUploadExts[ext]
-}
-`
-	}
-
 	preHashCode := strings.Join(preHashLines, "\n")
 
 	formParseCode := "r.ParseForm()"
@@ -2570,7 +2611,7 @@ import (
     "fmt"
     "net/http"
     "strings"
-    %s%s%s%s%s%s
+    %s%s%s%s%s
     %q
     %q
     auth %q
@@ -2612,7 +2653,6 @@ func Create(db *sql.DB) http.HandlerFunc {
 %s`, pkgName,
 		jsonImport,
 		bcryptImport,
-		fileImport,
 		hooksImport,
 		procsImport,
 		luaImport,
@@ -2634,7 +2674,7 @@ func Create(db *sql.DB) http.HandlerFunc {
 		postCode,
 		redirectRet,
 		listPath,
-		uploadHelper+buildParamsCode)
+		buildParamsCode)
 
 	return os.WriteFile(filepath.Join(dir, "create.go"), []byte(code), 0644)
 }
@@ -3111,61 +3151,6 @@ func (g *Generator) generateUpdateHandler(dir string, r types.Resource) error {
 		luaImport = g.luaImport()
 	}
 
-	fileImport := ""
-	uploadHelper := ""
-	if hasFile {
-		fileImport = `    "io"
-    "os"
-    "path/filepath"
-    "time"
-`
-		uploadHelper = `
-func saveUploadedFile(r *http.Request, fieldName string) string {
-    file, header, err := r.FormFile(fieldName)
-    if err != nil {
-        return ""
-    }
-    defer file.Close()
-
-    ext := strings.ToLower(filepath.Ext(header.Filename))
-    if !safeUploadExt(ext) {
-        return ""
-    }
-
-    head := make([]byte, 512)
-    n, _ := io.ReadFull(file, head)
-    detected := http.DetectContentType(head[:n])
-    if n > 0 && (detected == "text/html" || detected == "image/svg+xml") {
-        return ""
-    }
-    if _, err := file.Seek(0, io.SeekStart); err != nil {
-        return ""
-    }
-
-    dir := "static/uploads/" + fieldName
-    os.MkdirAll(dir, 0755)
-    outPath := dir + "/" + fmt.Sprintf("%d%s", time.Now().UnixNano(), ext)
-    out, err := os.Create(outPath)
-    if err != nil {
-        return ""
-    }
-    defer out.Close()
-    io.Copy(out, file)
-    return "/" + outPath
-}
-
-var safeUploadExts = map[string]bool{
-    ".png": true, ".jpg": true, ".jpeg": true, ".gif": true, ".webp": true,
-    ".pdf": true, ".txt": true, ".csv": true, ".zip": true,
-    ".doc": true, ".docx": true, ".xls": true, ".xlsx": true,
-}
-
-func safeUploadExt(ext string) bool {
-    return safeUploadExts[ext]
-}
-`
-	}
-
 	formParseCode := "r.ParseForm()"
 	if hasFile {
 		formParseCode = "r.ParseMultipartForm(32 << 20)"
@@ -3274,7 +3259,7 @@ import (
     "net/http"
     "strconv"
     "strings"
-%s%s%s%s%s
+%s%s%s%s
     %q
     %q
     %q
@@ -3326,9 +3311,8 @@ func Update(db *sql.DB) http.HandlerFunc {
 %s        http.Redirect(w, r, %q, http.StatusFound)
     }
 }
-%s`, pkgName,
+`, pkgName,
 		jsonImport,
-		fileImport,
 		hooksImport,
 		procsImport,
 		luaImport,
@@ -3350,8 +3334,7 @@ func Update(db *sql.DB) http.HandlerFunc {
 		formParseCode,
 		postCode,
 		redirectRet,
-		listPath,
-		uploadHelper)
+		listPath)
 
 	return os.WriteFile(filepath.Join(dir, "update.go"), []byte(code), 0644)
 }

@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/MichalHerstus/yaga/internal/types"
 )
@@ -239,7 +240,7 @@ func configDSN(cfg *types.Config) string {
 // (a config with zero connections boots from the non-secret localhost default
 // baked into main.go). Returns an error on write failure.
 func (g *Generator) generateEnvFile() error {
-	dsn := configDSN(g.Config)
+	dsn := g.sqliteDSNForEnv(configDSN(g.Config))
 	if dsn == "" {
 		return nil
 	}
@@ -248,4 +249,44 @@ func (g *Generator) generateEnvFile() error {
 		"# The DATABASE_URL environment variable overrides this value at runtime.\n" +
 		"DATABASE_URL=" + dsn + "\n"
 	return os.WriteFile(filepath.Join(g.OutDir, ".ENV"), []byte(content), 0600)
+}
+
+// sqliteDSNForEnv resolves a relative SQLite file DSN against the directory
+// holding the source config, so the generated .ENV keeps working when the
+// dashboard is run from its own output directory (e.g. `make run` inside
+// admin/). The `dsn:` in yaga.yaml is authored relative to the folder where
+// `yaga init`/`yaga generate` ran, but the binary is executed with the output
+// directory as its CWD, so a verbatim relative path would resolve to the wrong
+// place (this is what produced `unable to open database file (14)`).
+//
+// Non-sqlite DSNs, empty DSNs, in-memory databases, already-absolute paths and
+// `file:` URIs carrying `mode=memory` are returned unchanged; a plain relative
+// path (or a relative `file:` URI) is rewritten to an absolute one, preserving
+// any query string/fragment.
+// Params: dsn (the configured connection DSN).
+// Returns: the DSN to write into .ENV.
+func (g *Generator) sqliteDSNForEnv(dsn string) string {
+	if !g.isSQLite() || dsn == "" {
+		return dsn
+	}
+	prefix, rest := "", dsn
+	if strings.HasPrefix(dsn, "file:") {
+		prefix, rest = "file:", strings.TrimPrefix(dsn, "file:")
+	}
+	query := ""
+	if i := strings.IndexAny(rest, "?#"); i >= 0 {
+		query, rest = rest[i:], rest[:i]
+	}
+	if rest == "" || strings.HasPrefix(rest, ":") || strings.Contains(query, "mode=memory") || filepath.IsAbs(rest) {
+		return dsn
+	}
+	base := g.ConfigDir
+	if base == "" {
+		base = "."
+	}
+	abs, err := filepath.Abs(filepath.Join(base, rest))
+	if err != nil {
+		return dsn
+	}
+	return prefix + filepath.ToSlash(abs) + query
 }

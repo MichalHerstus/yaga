@@ -2,9 +2,11 @@ package main
 
 import (
 	"database/sql"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"golang.org/x/crypto/bcrypt"
 	"gopkg.in/yaml.v3"
 	_ "modernc.org/sqlite"
 )
@@ -526,9 +528,9 @@ resources:
 	// Verify customizations preserved
 	var merged struct {
 		Resources []struct {
-			Name   string `yaml:"name"`
-			Label  string `yaml:"label"`
-			List   struct {
+			Name  string `yaml:"name"`
+			Label string `yaml:"label"`
+			List  struct {
 				Columns []struct {
 					Name  string `yaml:"name"`
 					Label string `yaml:"label"`
@@ -846,4 +848,116 @@ resources: []
 	if len(merged.Resources) != 1 || merged.Resources[0].Name != "Post" {
 		t.Fatalf("expected 1 Post resource, got %v", merged.Resources)
 	}
+}
+
+// TestAdminBootstrapMessage verifies the admin credentials are surfaced
+// whenever an admin row is inserted — including the case where the auth tables
+// already existed (e.g. a demo database that ships seeded roles) but the users
+// table was empty. Before the fix the password was silently swallowed in that
+// case, leaving the operator unable to log in.
+func TestAdminBootstrapMessage(t *testing.T) {
+	cases := []struct {
+		name          string
+		createdTables bool
+		inserted      bool
+		updated       bool
+		want          []string
+	}{
+		{"created and inserted", true, true, false, []string{"Created auth tables (users, roles).", "Seeded admin user.", "Admin login: admin@admin.test / s3cret"}},
+		{"preexisting tables inserted", false, true, false, []string{"Seeded admin user.", "Admin login: admin@admin.test / s3cret"}},
+		{"password updated", false, false, true, []string{"Updated admin password.", "Admin login: admin@admin.test / s3cret"}},
+		{"created no insert", true, false, false, []string{"Created auth tables (users, roles)."}},
+		{"nothing", false, false, false, nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := adminBootstrapMessage(tc.createdTables, tc.inserted, tc.updated, "s3cret")
+			if strings.Join(got, "\n") != strings.Join(tc.want, "\n") {
+				t.Errorf("adminBootstrapMessage = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestEnsureAdminUserPreSeededRoles ensures the admin row is inserted (and thus
+// its one-time password is reported) even when the roles table already exists
+// with seeded rows and only the users table is empty.
+func TestEnsureAdminUserPreSeededRoles(t *testing.T) {
+	db := newAdminTestDB(t)
+
+	inserted, updated, err := ensureAdminUser(db, "sqlite", "s3cret", false)
+	if err != nil {
+		t.Fatalf("ensureAdminUser: %v", err)
+	}
+	if !inserted || updated {
+		t.Fatalf("first run = (inserted=%v, updated=%v), want (true, false)", inserted, updated)
+	}
+
+	var count int
+	if err := db.QueryRow("SELECT COUNT(*) FROM users").Scan(&count); err != nil {
+		t.Fatalf("count users: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("user count = %d, want 1", count)
+	}
+
+	inserted, updated, err = ensureAdminUser(db, "sqlite", "s3cret", false)
+	if err != nil {
+		t.Fatalf("ensureAdminUser (second): %v", err)
+	}
+	if inserted || updated {
+		t.Fatalf("second run = (inserted=%v, updated=%v), want (false, false) — an existing user set with no explicit password must be untouched", inserted, updated)
+	}
+}
+
+// TestEnsureAdminUserResetsPassword verifies the fix for the silently-ignored
+// --admin-password flag: on a database that already has a users row, passing an
+// explicit password must update the admin@admin.test password instead of being
+// dropped.
+func TestEnsureAdminUserResetsPassword(t *testing.T) {
+	db := newAdminTestDB(t)
+
+	if _, _, err := ensureAdminUser(db, "sqlite", "old-pw", false); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	inserted, updated, err := ensureAdminUser(db, "sqlite", "demo", true)
+	if err != nil {
+		t.Fatalf("ensureAdminUser reset: %v", err)
+	}
+	if inserted || !updated {
+		t.Fatalf("reset = (inserted=%v, updated=%v), want (false, true)", inserted, updated)
+	}
+
+	var stored string
+	if err := db.QueryRow("SELECT password FROM users WHERE email = 'admin@admin.test'").Scan(&stored); err != nil {
+		t.Fatalf("read password: %v", err)
+	}
+	if bcrypt.CompareHashAndPassword([]byte(stored), []byte("demo")) != nil {
+		t.Fatal("stored hash does not match the reset password 'demo'")
+	}
+	if bcrypt.CompareHashAndPassword([]byte(stored), []byte("old-pw")) == nil {
+		t.Fatal("stored hash still matches the old password")
+	}
+}
+
+func newAdminTestDB(t *testing.T) *sql.DB {
+	t.Helper()
+	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "admin.sqlite"))
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	stmts := []string{
+		`CREATE TABLE roles (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL)`,
+		`INSERT INTO roles (name) VALUES ('admin'), ('manager'), ('user')`,
+		`CREATE TABLE users (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, email TEXT UNIQUE NOT NULL, password TEXT NOT NULL, role_id INTEGER REFERENCES roles(id), role_name TEXT DEFAULT 'user', status TEXT DEFAULT 'active')`,
+	}
+	for _, s := range stmts {
+		if _, err := db.Exec(s); err != nil {
+			t.Fatalf("exec %q: %v", s, err)
+		}
+	}
+	return db
 }

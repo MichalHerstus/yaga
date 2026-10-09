@@ -99,8 +99,9 @@ Flags:
                  list/card filter block) and rewrite the config
   --dry-run      With validate: show what --fix would apply without writing
   --admin-password, -p PASSWORD
-                 Set the initial admin password for --db scaffolding
-                 (a random one is generated and printed when omitted)
+                 Set the admin password for --db scaffolding: inserts the
+                 admin when the users table is empty, otherwise resets its
+                 password (a random one is generated and printed when omitted)
 
 AI-assisted edit (experimental feature only):
   --prompt TEXT  Edit yaga.yaml via AI instead of the TUI
