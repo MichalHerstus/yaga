@@ -2221,8 +2221,9 @@ func (g *Generator) actionExecSQL(a types.Action) string {
 
 // actionScriptBlock renders the Go source that runs a script: action body via
 // luascript.Run against the given executor (db, or tx when the action is
-// audited). An abort() call redirects to the resource list with the message as
-// a ?flash= query param; any real runtime error aborts with a 500.
+// audited). A redirect() / redirect_to() call from the script redirects to the
+// returned path; an abort() call redirects to the resource list with the
+// message as a ?flash= query param; any real runtime error aborts with a 500.
 // Params: executor ("db" or "tx"), listPath (the resource list path literal),
 // a (the action definition), tName (the table name), indent (leading whitespace).
 // Returns: the Go source lines.
@@ -2234,13 +2235,17 @@ func actionScriptBlock(executor, listPath string, a types.Action, tName, indent 
 %s    User:   auth.UserName(r),
 %s    Role:   auth.RoleName(r),
 %s}, %q); err != nil {
+%s    if luascript.IsRedirect(err) {
+%s        http.Redirect(w, r, err.URL, http.StatusFound)
+%s        return
+%s    }
 %s    if luascript.IsAbort(err) {
 %s        http.Redirect(w, r, %q+"?flash="+url.QueryEscape(err.Error()), http.StatusFound)
 %s        return
 %s    }
 %s    httperr.Internal(w, err)
 %s    return
-%s}`, indent, executor, indent, indent, tName, indent, a.Name, indent, indent, indent, a.Script, indent, indent, listPath, indent, indent, indent, indent, indent)
+%s}`, indent, executor, indent, indent, tName, indent, a.Name, indent, indent, indent, listPath, indent, indent, indent, indent, indent, indent, listPath, indent, indent, indent, indent, indent)
 }
 
 // bulkScriptBlock renders the Go source that runs a bulk script: action body

@@ -803,9 +803,17 @@ Each hook in one of four kinds:
 create/update, changes are written back to the row). Host helpers: `db.exec(sql,
 vars...)`, `db.query(sql, vars...)`, `db.query_one(sql, vars...)` (positional `?`
 bound on sqlite, auto-renumbered to `$N` on postgres/mssql), `abort(msg)` (stops with a
-visible flash / 400) and `log(msg)`. On create, the insert switches to a driver-aware
-`RETURNING` / `OUTPUT INSERTED.<id>` so after-create hooks receive the real row id. A
-hook error aborts the request with HTTP 500.
+visible flash / 400), `redirect(url)` / `redirect_to(path, params)` (302 to a
+path-only URL — hooks and actions only, not bulk), and `log(msg)`. On create, the
+insert switches to a driver-aware `RETURNING` / `OUTPUT INSERTED.<id>` so
+after-create hooks receive the real row id. A hook error aborts the request with
+HTTP 500.
+
+**Redirecting after an action or hook:** `redirect("/admin/customer/42")` or
+`redirect_to("/admin/customer/" .. tostring(ctx.values["customer_id"]), {flash = "done"})`
+send the browser to another page. In a hook it skips the rest of the operation;
+in an action it replaces the default return to the resource list. Not available
+in bulk actions.
 
 ---
 

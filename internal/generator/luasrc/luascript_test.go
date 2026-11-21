@@ -65,3 +65,61 @@ func TestRunPrintsToStdout(t *testing.T) {
 		t.Errorf("stdout = %q, want %q", got, want)
 	}
 }
+
+func TestRunRedirect(t *testing.T) {
+	err := RunWithOutput(context.Background(), noopExecer{}, Scope{ID: 7}, `redirect("/admin/customer/42")`, nil)
+	if err == nil {
+		t.Fatal("expected RedirectError, got nil")
+	}
+	re, ok := err.(*RedirectError)
+	if !ok {
+		t.Fatalf("expected *RedirectError, got %T: %v", err, err)
+	}
+	if re.URL != "/admin/customer/42" {
+		t.Errorf("redirect URL = %q, want %q", re.URL, "/admin/customer/42")
+	}
+	if !IsRedirect(err) {
+		t.Error("IsRedirect(err) should be true")
+	}
+	if IsAbort(err) {
+		t.Error("IsAbort(err) should be false for redirect")
+	}
+}
+
+func TestRunRedirectTo(t *testing.T) {
+	err := RunWithOutput(context.Background(), noopExecer{}, Scope{ID: 7}, `redirect_to("/admin/customer/" .. tostring(ctx.id), { flash = "created", order_id = "99" })`, nil)
+	if err == nil {
+		t.Fatal("expected RedirectError, got nil")
+	}
+	re, ok := err.(*RedirectError)
+	if !ok {
+		t.Fatalf("expected *RedirectError, got %T: %v", err, err)
+	}
+	if re.URL != "/admin/customer/7?flash=created&order_id=99" {
+		t.Errorf("redirect URL = %q, want %q", re.URL, "/admin/customer/7?flash=created&order_id=99")
+	}
+}
+
+func TestRunRedirectNonPath(t *testing.T) {
+	err := RunWithOutput(context.Background(), noopExecer{}, Scope{}, `redirect("http://evil.example.com")`, nil)
+	if err == nil {
+		t.Fatal("expected RedirectError, got nil")
+	}
+	re, ok := err.(*RedirectError)
+	if !ok {
+		t.Fatalf("expected *RedirectError, got %T: %v", err, err)
+	}
+	if re.URL != "http://evil.example.com" {
+		t.Errorf("redirect URL = %q, want %q", re.URL, "http://evil.example.com")
+	}
+}
+
+func TestRunNoRedirect(t *testing.T) {
+	err := RunWithOutput(context.Background(), noopExecer{}, Scope{}, `local x = 1`, nil)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if IsRedirect(err) {
+		t.Error("IsRedirect(err) should be false when no redirect")
+	}
+}

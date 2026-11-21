@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -69,7 +70,30 @@ func IsAbort(err error) bool {
 	return false
 }
 
+// RedirectError is raised by the Lua redirect() / redirect_to() host functions.
+// It carries the target path (must be path-only, starting with "/") the
+// generated handler redirects to.
+type RedirectError struct{ URL string }
+
+func (e *RedirectError) Error() string { return e.URL }
+
+// IsRedirect reports whether err (or any error in its chain) is a RedirectError.
+func IsRedirect(err error) bool {
+	for err != nil {
+		if _, ok := err.(*RedirectError); ok {
+			return true
+		}
+		u, ok := err.(interface{ Unwrap() error })
+		if !ok {
+			return false
+		}
+		err = u.Unwrap()
+	}
+	return false
+}
+
 const abortPrefix = "\x00yaga-abort:"
+const redirectPrefix = "\x00yaga-redirect:"
 
 // Run executes the Lua code as the body of a run(ctx) function with the given
 // scope. The db Execer is exposed to the script as db.exec, db.query and
@@ -187,6 +211,43 @@ func RunWithOutput(ctx context.Context, db Execer, scope Scope, code string, out
 		L.RaiseError("%s%s", abortPrefix, L.CheckString(1))
 		return 0
 	}))
+	L.SetGlobal("redirect", L.NewFunction(func(L *lua.LState) int {
+		L.RaiseError("%s%s", redirectPrefix, L.CheckString(1))
+		return 0
+	}))
+	L.SetGlobal("redirect_to", L.NewFunction(func(L *lua.LState) int {
+		path := L.CheckString(1)
+		tbl := L.CheckTable(2)
+		var parts []string
+		tbl.ForEach(func(k, v lua.LValue) {
+			key := lua.LVAsString(k)
+			val := ""
+			switch x := v.(type) {
+			case lua.LString:
+				val = string(x)
+			case lua.LNumber:
+				f := float64(x)
+				if f == float64(int64(f)) {
+					val = fmt.Sprintf("%d", int64(f))
+				} else {
+					val = fmt.Sprintf("%g", f)
+				}
+			case lua.LBool:
+				val = fmt.Sprintf("%t", bool(x))
+			case *lua.LNilType:
+				val = ""
+			default:
+				val = v.String()
+			}
+			parts = append(parts, url.QueryEscape(key)+"="+url.QueryEscape(val))
+		})
+		target := path
+		if len(parts) > 0 {
+			target += "?" + strings.Join(parts, "&")
+		}
+		L.RaiseError("%s%s", redirectPrefix, target)
+		return 0
+	}))
 	L.SetGlobal("print", L.NewFunction(func(L *lua.LState) int {
 		var sb strings.Builder
 		top := L.GetTop()
@@ -213,6 +274,13 @@ func RunWithOutput(ctx context.Context, db Execer, scope Scope, code string, out
 		return err
 	}
 	if err := L.CallByParam(lua.P{Fn: L.GetGlobal("run"), NRet: 0, Protect: true}, L.GetGlobal("ctx")); err != nil {
+		if idx := strings.Index(err.Error(), redirectPrefix); idx >= 0 {
+			url := err.Error()[idx+len(redirectPrefix):]
+			if nl := strings.IndexByte(url, '\n'); nl >= 0 {
+				url = url[:nl]
+			}
+			return &RedirectError{URL: url}
+		}
 		if idx := strings.Index(err.Error(), abortPrefix); idx >= 0 {
 			msg := err.Error()[idx+len(abortPrefix):]
 			if nl := strings.IndexByte(msg, '\n'); nl >= 0 {

@@ -142,7 +142,8 @@ func (g *Generator) collectFnHooks() []string {
 // procs.Exec(db, name, scope.ID) on sqlite when the procedure is declared under
 // procedures: (undeclared sqlite proc hooks are skipped, so a config without a
 // procedures: block stays byte-identical). A hook error aborts the request with
-// a 500 response; a script abort() returns a 400 with its message.
+// a 500 response; a script abort() returns a 400 with its message; a script
+// redirect() / redirect_to() redirects to the returned path.
 // Params: hooks (the before or after list), scopeVar (name of the Scope var),
 // indent (the leading whitespace for each emitted line).
 // Returns: the Go source lines (empty when the list is empty or all hooks are
@@ -170,6 +171,10 @@ func (g *Generator) hookCallsStr(hooks []types.Hook, scopeVar, indent string) st
     Role:   auth.RoleName(r),
     Values: %s.Values,
 }, %q); err != nil {
+    if luascript.IsRedirect(err) {
+        http.Redirect(w, r, err.URL, http.StatusFound)
+        return
+    }
     if luascript.IsAbort(err) {
         httperr.BadRequest(w, err.Error())
         return

@@ -321,6 +321,41 @@ Stops the script immediately and produces a **user-facing** outcome:
 Prefer `abort` for validation failures — it is the only way to give useful
 feedback instead of a 500.
 
+### `redirect(url)` / `redirect_to(path, params)`
+
+Sends the browser to another page after the script finishes. Only available in
+**script hooks** (create/update/delete before/after) and **script actions** —
+not in bulk script actions.
+
+- `redirect(url)` — `url` must be a path starting with `/` (path-only, no
+  scheme/host). Anything else is rejected with an HTTP 500.
+- `redirect_to(path, params)` — convenience: appends `?k=v&k2=v2` to `path`,
+  with keys and values URL-encoded. `params` is a string map.
+
+```lua
+-- primitive
+redirect("/admin/customer/42?flash=order_created")
+
+-- convenience (builds the query string for you)
+redirect_to("/admin/customer/" .. tostring(ctx.values["customer_id"]), {
+  flash = "Order created",
+  order_id = tostring(ctx.values["id"]),
+})
+```
+
+The target is built from `ctx` (`id`, `table`, `action`, `user`, `role`,
+`values`) — there are no new `ctx` fields. After a `redirect()` / `redirect_to()`
+call, the rest of the script is skipped and the browser issues a `302` to the
+target path.
+
+**Outcome matrix:**
+
+| Where `redirect()` runs | What happens |
+|---|---|
+| Hook (before/after create/update/delete) | `302` redirect to the given path; the rest of the op is skipped |
+| Action (non-bulk) | `302` redirect to the given path instead of the resource list |
+| Bulk action | not available — `redirect()`/`redirect_to()` simply don't exist |
+
 ### `log(msg)`
 
 Writes a line to the server log (prefixed with `[lua]`). Useful for
@@ -429,6 +464,41 @@ form:
 
 Whatever SQL the script runs is what takes effect — the hook itself cannot
 "return" a value the handler would use; if it needs data it must query it.
+
+### Example 4 — after creating an order, show the customer page
+
+A before-create hook that sets defaults, then an after-create hook that sends
+the operator to the customer's page instead of the order list:
+
+```yaml
+form:
+  create:
+    hooks:
+      before:
+        - name: default_status
+          script: |
+            if ctx.values["status"] == nil then
+              ctx.values["status"] = "draft"
+            end
+      after:
+        - name: go_to_customer
+          script: |
+            redirect_to("/admin/customer/" .. tostring(ctx.values["customer_id"]), {
+              flash = "Order created",
+              order_id = tostring(ctx.values["id"]),
+            })
+```
+
+The operator lands on `/admin/customer/7?flash=Order+created&order_id=101`
+after the order is inserted.
+
+The same works from a custom action — replace the default return-to-list with
+a redirect to any path in the dashboard:
+
+```lua
+-- inside an action script:
+redirect("/admin/customer/" .. tostring(ctx.id))
+```
 
 ---
 

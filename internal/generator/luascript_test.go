@@ -198,6 +198,62 @@ func TestGenerateScriptSQLite(t *testing.T) {
 	}
 }
 
+// TestGenerateScriptRedirect verifies that a script: hook and a script: action
+// both emit redirect handling (IsRedirect before IsAbort, http.Redirect to
+// err.URL), while bulk script actions do not.
+func TestGenerateScriptRedirect(t *testing.T) {
+	dir := t.TempDir()
+	cfg := scriptConfig("postgres")
+	// add a redirecting script hook on create (before)
+	cfg.Resources[0].Form.Create.Hooks.Before = append(cfg.Resources[0].Form.Create.Hooks.Before, types.Hook{
+		Name: "redirect_after_create",
+		Script: `redirect_to("/admin/customer/" .. tostring(ctx.values["customer_id"]), { flash = "created" })`,
+	})
+	// add a redirecting script action (non-bulk)
+	cfg.Resources[0].Actions = append(cfg.Resources[0].Actions, types.Action{
+		Name: "send_to_customer",
+		Script: `redirect("/admin/customer/" .. tostring(ctx.id))`,
+	})
+
+	g := New(cfg, dir)
+	if err := g.Generate(); err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	assertGeneratedGoParses(t, dir)
+
+	create := readResourceFile(t, dir, "user", "create.go")
+	for _, want := range []string{
+		`luascript.IsRedirect(err)`,
+		`http.Redirect(w, r, err.URL, http.StatusFound)`,
+		`luascript.IsAbort(err)`,
+		`httperr.BadRequest(w, err.Error())`,
+	} {
+		if !strings.Contains(create, want) {
+			t.Errorf("create.go missing %q\n--- generated:\n%s", want, create)
+		}
+	}
+
+	actions := readResourceFile(t, dir, "user", "actions.go")
+	for _, want := range []string{
+		`luascript.IsRedirect(err)`,
+		`http.Redirect(w, r, err.URL, http.StatusFound)`,
+		`luascript.IsAbort(err)`,
+	} {
+		if !strings.Contains(actions, want) {
+			t.Errorf("actions.go missing %q\n--- generated:\n%s", want, actions)
+		}
+	}
+
+	// bulk script action: redirect must NOT be emitted (only abort + flash)
+	bulk := readResourceFile(t, dir, "user", "bulk.go")
+	if strings.Contains(bulk, "luascript.IsRedirect") {
+		t.Errorf("bulk.go must not contain IsRedirect\n--- generated:\n%s", bulk)
+	}
+	if !strings.Contains(bulk, `http.Redirect(w, r, "/admin/user"+"?flash="+url.QueryEscape(err.Error()), http.StatusFound)`) {
+		t.Errorf("bulk.go missing abort flash redirect\n--- generated:\n%s", bulk)
+	}
+}
+
 // TestGenerateScriptFeatureOff verifies a config without any script: emits no
 // luascript package, no gopher-lua dependency, no RoleName and no BadRequest —
 // the generated tree stays byte-identical to the pre-E2 output.
