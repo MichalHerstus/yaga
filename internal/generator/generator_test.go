@@ -1998,6 +1998,50 @@ func TestGenerateBulkTransaction(t *testing.T) {
 	}
 }
 
+// TestGenerateListTableHorizontalScroll keeps wide resource lists usable on
+// narrow screens: the table lives in an overflow-x-auto wrapper and headers
+// stay on one line (cells already use whitespace-nowrap).
+func TestGenerateListTableHorizontalScroll(t *testing.T) {
+	for _, bulk := range []bool{false, true} {
+		name := "plain"
+		if bulk {
+			name = "bulk"
+		}
+		t.Run(name, func(t *testing.T) {
+			res := types.Resource{
+				Name: "User",
+				List: &types.ListConfig{Columns: []types.Column{{Name: "name", Label: "Name", Sortable: true}}},
+			}
+			if bulk {
+				res.Actions = []types.Action{{Name: "mark", Label: "Mark", Query: "UPDATE users SET done = 1 WHERE id = $1", Bulk: true}}
+			}
+			cfg := &types.Config{
+				Version:   "1",
+				Panel:     types.Panel{ID: "admin", Path: "/admin", Name: "Admin"},
+				Resources: []types.Resource{res},
+			}
+			dir := t.TempDir()
+			if err := New(cfg, dir).Generate(); err != nil {
+				t.Fatalf("generate: %v", err)
+			}
+			src, err := os.ReadFile(filepath.Join(dir, "internal/views/resources/user", "list.templ"))
+			if err != nil {
+				t.Fatalf("read list.templ: %v", err)
+			}
+			s := string(src)
+			open := strings.Index(s, `<div class="overflow-x-auto">`)
+			table := strings.Index(s, `<table class="min-w-full`)
+			close := strings.Index(s, `</table>`)
+			if open < 0 || table < 0 || close < 0 || !(open < table && table < close) {
+				t.Fatalf("table must be inside the horizontal scroll wrapper\n--- generated:\n%s", s)
+			}
+			if !strings.Contains(s, `tracking-wider whitespace-nowrap`) {
+				t.Errorf("list headers must use whitespace-nowrap\n--- generated:\n%s", s)
+			}
+		})
+	}
+}
+
 // TestGenerateOptionsLoaderDedupe ensures fields sharing the same resolved
 // option SQL (via options_sql) emit a single options-load block whose variable
 // is reused by both fields (no N+1).

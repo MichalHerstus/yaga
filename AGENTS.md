@@ -157,6 +157,10 @@ A YAML-defined collapsible filter on list/card views. `list.filter`/`card.filter
 
 Flags: `generate --config <yaml> --out <dir> --force --verbose` (short variants `-c`, `-o`, `-f`, `-v`). `--out` basename becomes the module name.
 
+### Wide list tables scroll horizontally
+
+`generateListTempl` (`templ.go`) wraps every resource list `<table>` in `<div class="overflow-x-auto">` (both the plain and `bulk` variants) and adds `whitespace-nowrap` to header cells; data cells already use it. The outer card keeps `overflow-hidden` for rounded corners, while pagination/bulk toolbar stay outside the scroll container so only the table scrolls. Regression: `TestGenerateListTableHorizontalScroll`.
+
 ### Computed fields (E7)
 
 `list.computed`/`card.computed`/`detail.computed: [{name, label, type, expression}]` add **read-only, expression-derived** columns/fields computed at query time. `internal/generator/helpers.go` holds a balanced-paren scanner + `expandHelpers` fixpoint (innermost-first via sorting spans by end offset) that expands each `helpers.<fn>(...)` token in `expression` into driver-correct SQL at **generation time** (config text is emitted verbatim otherwise); unknown/arity-mismatched calls are left untouched and never block neighbouring expansions. Helpers: `date_diff`/`year_diff`/`month_diff`, `coalesce`, `ifnull`, `round` (pg → `ROUND({a}::numeric, {n})`), `now()`. Expressions may reference real columns (incl. `{fk}_label` aliases) and earlier computed names in the same block.

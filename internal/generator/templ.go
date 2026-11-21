@@ -209,7 +209,7 @@ func (g *Generator) generateListTempl(dir string, r types.Resource) error {
 			label = c.Name
 		}
 		if c.Sortable {
-			headers.WriteString(fmt.Sprintf(`            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+			headers.WriteString(fmt.Sprintf(`            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider whitespace-nowrap">
                 <a href={ templ.SafeURL(fmt.Sprintf("?sort=%%s&order=%%s", %q, sortOrder(data.Sort, %q, data.Order))) } class="flex items-center gap-1 hover:text-gray-700 dark:hover:text-gray-200">
                     %s
                     @sortIcon(data.Sort, %q, data.Order)
@@ -217,7 +217,7 @@ func (g *Generator) generateListTempl(dir string, r types.Resource) error {
             </th>
 `, c.Name, c.Name, label, c.Name))
 		} else {
-			headers.WriteString(fmt.Sprintf(`            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">%s</th>
+			headers.WriteString(fmt.Sprintf(`            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider whitespace-nowrap">%s</th>
 `, label))
 		}
 		rendered := renderCell(c.Type, fmt.Sprintf(`item[%q]`, c.Name))
@@ -349,10 +349,11 @@ templ %s(data *viewmodels.ListData) {
         @searchBar(data.Search, data.Resource)
 
         <div class="bg-white dark:bg-gray-800 shadow rounded-lg overflow-hidden">
+            <div class="overflow-x-auto">
             <table class="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
                 <thead class="bg-gray-50 dark:bg-gray-900">
                     <tr>
-%s                        <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Actions</th>
+%s                        <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider whitespace-nowrap">Actions</th>
                     </tr>
                 </thead>
                 <tbody class="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
@@ -362,6 +363,7 @@ templ %s(data *viewmodels.ListData) {
                     }
                 </tbody>
             </table>
+            </div>
 
             @pagination(data.Page, data.TotalPages, data.Total, data.Search, data.Sort, data.Order, data.FilterQS)
         </div>
@@ -390,10 +392,11 @@ templ %s(data *viewmodels.ListData) {
         <div class="bg-white dark:bg-gray-800 shadow rounded-lg overflow-hidden">
             <form method="POST">
                 <input type="hidden" name="_csrf" value={ data.CSRFToken } />
+                <div class="overflow-x-auto">
                 <table class="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
                     <thead class="bg-gray-50 dark:bg-gray-900">
                         <tr>
-%s                        <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Actions</th>
+%s                        <th class="px-6 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider whitespace-nowrap">Actions</th>
                         </tr>
                     </thead>
                     <tbody class="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
@@ -403,6 +406,7 @@ templ %s(data *viewmodels.ListData) {
                         }
                     </tbody>
                 </table>
+                </div>
                 <div class="bg-gray-50 dark:bg-gray-900 px-4 py-3 border-t border-gray-200 dark:border-gray-700 flex items-center gap-2">
 %s                </div>
             </form>
