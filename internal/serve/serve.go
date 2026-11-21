@@ -48,6 +48,9 @@ type Server struct {
 	port int
 	open bool // open the browser automatically after binding
 
+	liveDSN    string // live database connection string (--db flag)
+	liveDriver string // resolved driver for the live DSN
+
 	mcp    mcpHandler
 	mux    *http.ServeMux
 	stubDB *sql.DB // in-memory sqlite stub for E6 debug dry-runs
@@ -57,6 +60,8 @@ type Server struct {
 type Options struct {
 	Port        int  // listen port (0 -> DefaultPort)
 	OpenBrowser bool // run `open`/`xdg-open` after the port is bound
+	LiveDSN     string // live database connection string (--db flag for wedit)
+	LiveDriver  string // driver override; auto-detected from DSN when empty
 }
 
 // New builds a wedit server around a parsed config.
@@ -69,6 +74,8 @@ func New(cfg *types.Config, configPath string, opts Options) *Server {
 		configPath: configPath,
 		port:       opts.Port,
 		open:       opts.OpenBrowser,
+		liveDSN:    opts.LiveDSN,
+		liveDriver: opts.LiveDriver,
 		mux:        http.NewServeMux(),
 	}
 	s.mcp = mcp.New(serverMCPState{s: s})
@@ -182,6 +189,9 @@ func (s *Server) routes() {
 	mux.HandleFunc("POST /api/lua-run", s.handleLuaRun)
 	mux.HandleFunc("POST /api/sql-run", s.handleSQLRun)
 	mux.HandleFunc("POST /api/sample-refresh", s.handleSampleRefresh)
+
+	mux.HandleFunc("GET /api/schema-browser", s.handleSchemaBrowser)
+	mux.HandleFunc("GET /api/schema-sample/{table}", s.handleSchemaSample)
 
 	sub, err := fs.Sub(staticFS, "static")
 	if err != nil {

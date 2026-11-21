@@ -490,10 +490,14 @@ func driverForDSN(driver, dsn string) string {
 	if driver != "" {
 		return driver
 	}
-	if strings.HasPrefix(dsn, "postgres://") || strings.HasPrefix(dsn, "postgresql://") {
+	switch {
+	case strings.HasPrefix(dsn, "postgres://") || strings.HasPrefix(dsn, "postgresql://"):
 		return "pgx"
+	case strings.HasPrefix(dsn, "sqlserver://") || strings.HasPrefix(dsn, "mssql://"):
+		return "mssql"
+	default:
+		return "sqlite"
 	}
-	return "sqlite"
 }
 
 // parseIntID safely parses a string to int64.

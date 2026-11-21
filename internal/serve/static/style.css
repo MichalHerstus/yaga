@@ -441,3 +441,63 @@ table.rows .row-actions { white-space: nowrap; width: 1%; text-align: right; }
 }
 .sub-heading { font-size: 14px; margin: 14px 0 6px; color: var(--text-dim); font-weight: 600; }
 .type-toggle { display: flex; gap: 4px; }
+
+/* navigation move buttons */
+.tree-item .tree-actions .btn,
+.tree-group-head .tree-actions .btn {
+  font-size: 10px;
+  padding: 2px 6px;
+}
+
+/* icon select field */
+.icon-select {
+  width: 100%;
+}
+.icon-chip {
+  font-size: 12px;
+  font-family: var(--mono);
+}
+
+/* image field (logo / favicon) */
+.image-field-wrap input[type=file] {
+  width: 100%;
+}
+.image-preview img {
+  display: block;
+  margin-top: 6px;
+}
+
+/* sidebar sections (Settings group) */
+.sidebar-section { margin-bottom: 6px; }
+.sidebar-section-head {
+  display: flex; align-items: center; gap: 6px;
+  padding: 8px 10px; border-radius: 6px; cursor: pointer;
+  font-weight: 600; font-size: 13px; color: var(--text);
+  background: var(--bg-hover);
+}
+.sidebar-section-head:hover { background: var(--bg-light); }
+.sidebar-chevron { font-size: 10px; width: 12px; text-align: center; }
+.sidebar-section-items { display: flex; flex-direction: column; gap: 2px; padding-left: 6px; }
+.tab-sub {
+  padding: 6px 10px 6px 26px; font-size: 12px; text-align: left;
+  background: transparent; color: var(--text-dim);
+}
+.tab-sub:hover { background: var(--bg-hover); color: var(--text); }
+.tab-sub.active { background: var(--bg-light); color: var(--text); font-weight: 600; }
+
+/* topbar shortcut buttons active state */
+.header-right .btn.active { background: var(--accent-2); color: var(--bg-alt); font-weight: 600; }
+
+/* resource table actions */
+table.rows .row-actions .btn { margin: 0 3px; }
+
+/* navigation drag-and-drop */
+.tree-item.dragging { opacity: 0.5; background: var(--bg-light); }
+.tree-group.dragging { opacity: 0.5; }
+.tree-item.drag-over,
+.tree-group-head.drag-over {
+  background: var(--accent-2) !important;
+  color: var(--bg-alt);
+  outline: 2px solid var(--accent);
+  border-radius: 6px;
+}

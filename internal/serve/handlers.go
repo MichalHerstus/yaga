@@ -4,9 +4,11 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/MichalHerstus/yaga/internal/fixer"
@@ -431,6 +433,133 @@ func (s *Server) handleSQLRun(w http.ResponseWriter, r *http.Request) {
 			"ok": result.Error == "", "steps": []RunSQLResult{result}, "driver": "sqlite",
 		})
 	}
+}
+
+// handleSchemaBrowser returns every table from the captured schema: block with
+// its columns and foreign keys. Read-only — no DB connection required.
+func (s *Server) handleSchemaBrowser(w http.ResponseWriter, r *http.Request) {
+	s.mu.RLock()
+	cfg := s.cfg
+	s.mu.RUnlock()
+
+	tables := []types.SchemaTable{}
+	if cfg.Schema != nil {
+		tables = cfg.Schema.Tables
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"tables": tables})
+}
+
+// handleSchemaSample returns up to `limit` rows from the in-memory stub for
+// the given table. When a live --db DSN is configured, it queries the live
+// database directly instead (fresh data, no seeding required).
+func (s *Server) handleSchemaSample(w http.ResponseWriter, r *http.Request) {
+	table := r.PathValue("table")
+	if table == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "table required"})
+		return
+	}
+
+	limit := 10
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 1000 {
+			limit = n
+		}
+	}
+
+	// When a live database is configured, query it directly.
+	if s.liveDSN != "" {
+		rows, err := queryLiveSample(s.liveDriver, s.liveDSN, table, limit)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"table": table,
+			"limit": limit,
+			"rows":  rows,
+			"count": len(rows),
+		})
+		return
+	}
+
+	stub, err := s.ensureStub()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	query := fmt.Sprintf("SELECT * FROM %s LIMIT %d", quoteIdentStub(table), limit)
+	result := RunSQL(r.Context(), stub, query, 0)
+
+	if result.Error != "" {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": result.Error})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"table": table,
+		"limit": limit,
+		"rows":  result.Rows,
+		"count": len(result.Rows),
+	})
+}
+
+// queryLiveSample opens a live database connection, selects up to `limit` rows
+// from `table`, and returns them as an array of column->value maps. The
+// connection is closed before returning.
+func queryLiveSample(driver, dsn, table string, limit int) ([]map[string]interface{}, error) {
+	driver = driverForDSN(driver, dsn)
+	db, err := sql.Open(driver, dsn)
+	if err != nil {
+		return nil, fmt.Errorf("opening live database: %w", err)
+	}
+	defer db.Close()
+	if err := db.Ping(); err != nil {
+		return nil, fmt.Errorf("pinging live database: %w", err)
+	}
+
+	var query string
+	var qIdent func(string) string
+	switch driver {
+	case "mssql":
+		query = fmt.Sprintf("SELECT TOP %d * FROM [%s]", limit, table)
+		qIdent = func(s string) string { return "[" + strings.ReplaceAll(s, "]", "]]") + "]" }
+	default: // sqlite, postgres
+		query = fmt.Sprintf("SELECT * FROM %s LIMIT %d", quoteIdentStub(table), limit)
+		qIdent = quoteIdentStub
+	}
+	_ = qIdent // query already built above
+
+	rows, err := db.Query(query)
+	if err != nil {
+		return nil, fmt.Errorf("querying live database: %w", err)
+	}
+	defer rows.Close()
+
+	cols, err := rows.Columns()
+	if err != nil {
+		return nil, fmt.Errorf("reading columns: %w", err)
+	}
+
+	var out []map[string]interface{}
+	for rows.Next() {
+		vals := make([]interface{}, len(cols))
+		ptrs := make([]interface{}, len(cols))
+		for j := range vals {
+			ptrs[j] = &vals[j]
+		}
+		if err := rows.Scan(ptrs...); err != nil {
+			return nil, fmt.Errorf("scanning row: %w", err)
+		}
+		row := make(map[string]interface{}, len(cols))
+		for j, c := range cols {
+			row[c] = vals[j]
+		}
+		out = append(out, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating rows: %w", err)
+	}
+	return out, nil
 }
 
 // handleSampleRefresh seeds the in-memory stub with up to 100 rows per schema

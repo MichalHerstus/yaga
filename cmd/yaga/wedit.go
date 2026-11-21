@@ -21,7 +21,7 @@ import (
 // loads the config via the shared --config flag, and runs the editor server
 // until interrupted.
 func cmdWedit() {
-	configPath, _, _, _, _, _, _, _ := parseGlobalFlags()
+	configPath, _, dbDSN, _, _, _, _, _ := parseGlobalFlags()
 	port, open := parseWeditFlags(os.Args[2:])
 
 	cfg, err := parser.ParseFile(configPath)
@@ -30,7 +30,11 @@ func cmdWedit() {
 		os.Exit(1)
 	}
 
-	srv := serve.New(cfg, configPath, serve.Options{Port: port, OpenBrowser: open})
+	srv := serve.New(cfg, configPath, serve.Options{
+		Port:       port,
+		OpenBrowser: open,
+		LiveDSN:    dbDSN,
+	})
 	if err := srv.Start(); err != nil {
 		fmt.Fprintf(os.Stderr, "WEdit error: %v\n", err)
 		os.Exit(1)

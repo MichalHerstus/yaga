@@ -12,6 +12,8 @@ const state = {
   pageName: null, // drill-in: page being edited
   dirty: false,
   rawDirty: false, // raw-tab textarea has unsaved typing
+  resourceSearch: "", // filter text for the resources table
+  schemaSearch: "", // filter text for the schema browser
   rev: 0, // last-known server config revision
   warnedRev: 0, // rev already announced as "changed on server" (toast dedup)
 };
@@ -109,6 +111,9 @@ function toggleEditorTheme() {
 }
 
 $("#theme-toggle").addEventListener("click", toggleEditorTheme);
+$("#btn-validate").addEventListener("click", () => switchPage("validate"));
+$("#btn-preview").addEventListener("click", () => switchPage("preview"));
+$("#btn-raw").addEventListener("click", () => switchPage("raw"));
 
 /* ---------- modal helpers ---------- */
 
@@ -503,6 +508,167 @@ function stringListField(grid, label, arrObj, key) {
   return i;
 }
 
+/* ---------- icon options (all names from the generator's iconSVG / iconNav / actionIcon) ---------- */
+
+const ICON_OPTIONS = [
+  { name: "users", label: "Users" },
+  { name: "chart", label: "Chart" },
+  { name: "dollar", label: "Dollar" },
+  { name: "check", label: "Check" },
+  { name: "clock", label: "Clock" },
+  { name: "cog", label: "Cog / Settings" },
+  { name: "bell", label: "Bell" },
+  { name: "home", label: "Home" },
+  { name: "mail", label: "Mail" },
+  { name: "lock", label: "Lock" },
+  { name: "folder", label: "Folder" },
+  { name: "user", label: "User" },
+  { name: "settings", label: "Settings (sliders)" },
+  { name: "document", label: "Document" },
+  { name: "shield", label: "Shield" },
+  { name: "layout", label: "Layout" },
+  { name: "list", label: "List" },
+  { name: "grid", label: "Grid" },
+  { name: "user-nav", label: "User (nav)" },
+  { name: "report", label: "Report" },
+  { name: "archive", label: "Archive" },
+  { name: "play", label: "Play" },
+  { name: "pause", label: "Pause" },
+  { name: "trash", label: "Trash" },
+  { name: "download", label: "Download" },
+  { name: "send", label: "Send" },
+  { name: "star", label: "Star" },
+  { name: "refresh", label: "Refresh" },
+  { name: "x", label: "X / Close" },
+  { name: "edit", label: "Edit" },
+  { name: "save", label: "Save" },
+  { name: "cancel", label: "Cancel" },
+  { name: "arrow-right", label: "Arrow right" },
+  { name: "plus", label: "Plus" },
+];
+
+function iconSelectField(grid, label, obj, key) {
+  const wrap = fieldEl(grid, label);
+  wrap.classList.add("icon-field-wrap");
+
+  const sel = document.createElement("select");
+  sel.className = "icon-select";
+  sel.value = obj[key] || "";
+
+  const none = document.createElement("option");
+  none.value = "";
+  none.textContent = "— none —";
+  sel.appendChild(none);
+
+  for (const ic of ICON_OPTIONS) {
+    const o = document.createElement("option");
+    o.value = ic.name;
+    o.textContent = ic.label;
+    sel.appendChild(o);
+  }
+
+  const preview = document.createElement("div");
+  preview.className = "icon-preview";
+  preview.style.marginTop = "6px";
+  preview.style.fontSize = "12px";
+  preview.style.color = "var(--text-dim)";
+  if (obj[key]) {
+    const chip = document.createElement("span");
+    chip.className = "icon-chip";
+    chip.style.display = "inline-flex";
+    chip.style.alignItems = "center";
+    chip.style.gap = "6px";
+    chip.style.padding = "4px 8px";
+    chip.style.border = "1px solid var(--border)";
+    chip.style.borderRadius = "4px";
+    chip.style.background = "var(--bg)";
+    chip.textContent = obj[key];
+    preview.appendChild(chip);
+  } else {
+    preview.textContent = "No icon selected.";
+  }
+
+  sel.addEventListener("change", () => {
+    const v = sel.value.trim();
+    if (v === "") delete obj[key];
+    else obj[key] = v;
+    preview.innerHTML = "";
+    if (v) {
+      const chip = document.createElement("span");
+      chip.className = "icon-chip";
+      chip.style.display = "inline-flex";
+      chip.style.alignItems = "center";
+      chip.style.gap = "6px";
+      chip.style.padding = "4px 8px";
+      chip.style.border = "1px solid var(--border)";
+      chip.style.borderRadius = "4px";
+      chip.style.background = "var(--bg)";
+      chip.textContent = v;
+      preview.appendChild(chip);
+    } else {
+      preview.textContent = "No icon selected.";
+    }
+    markDirty();
+  });
+
+  wrap.append(sel, preview);
+  return sel;
+}
+
+/* ---------- image field (logo / favicon) ---------- */
+
+function imageField(grid, label, obj, key) {
+  const wrap = fieldEl(grid, label);
+  wrap.classList.add("image-field-wrap");
+
+  const input = document.createElement("input");
+  input.type = "file";
+  input.accept = "image/jpeg,image/png";
+
+  const preview = document.createElement("div");
+  preview.className = "image-preview";
+  preview.style.marginTop = "8px";
+  if (obj[key]) {
+    const img = document.createElement("img");
+    img.src = obj[key];
+    img.style.maxWidth = "160px";
+    img.style.maxHeight = "160px";
+    img.style.border = "1px solid var(--border)";
+    img.style.borderRadius = "6px";
+    preview.appendChild(img);
+  }
+
+  const hint = document.createElement("div");
+  hint.className = "mono";
+  hint.textContent = "Accepted formats: JPEG (.jpg/.jpeg), PNG (.png)";
+
+  input.addEventListener("change", (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    if (file.type !== "image/jpeg" && file.type !== "image/png") {
+      toast("Please select a JPEG or PNG image", "error");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      obj[key] = ev.target.result; // data URL
+      preview.innerHTML = "";
+      const img = document.createElement("img");
+      img.src = ev.target.result;
+      img.style.maxWidth = "160px";
+      img.style.maxHeight = "160px";
+      img.style.border = "1px solid var(--border)";
+      img.style.borderRadius = "6px";
+      preview.appendChild(img);
+      markDirty();
+    };
+    reader.readAsDataURL(file);
+  });
+
+  wrap.append(input, preview, hint);
+  return input;
+}
+
 /* ---------- generic collection editor ---------- */
 
 /* ---- Embedded Lua tokenizer + highlighted textarea for script: bodies ---- */
@@ -735,33 +901,95 @@ function collectionEditor(container, items, schema, opts = {}) {
 
 /* ---------- tabs ---------- */
 
-const TABS = [
-  ["panel", "Panel"],
-  ["connections", "Connections"],
-  ["auth", "Auth"],
+/* Sidebar navigation: sections may group page links.
+   Validate / Preview / Raw YAML moved to topbar buttons. */
+const NAV = [
+  { section: "Settings", items: [
+    ["panel", "Panel"],
+    ["connections", "Connections"],
+    ["auth", "Auth"],
+  ]},
   ["navigation", "Navigation"],
   ["resources", "Resources"],
   ["pages", "Pages"],
-  ["validate", "Validate"],
-  ["preview", "Preview"],
-  ["raw", "Raw YAML"],
+  ["schema", "Schema"],
 ];
+
+/* groups whose section items are collapsed; defaults to open */
+const sidebarCollapsed = new Set();
 
 function renderTabs() {
   const nav = $("#tabs");
   nav.innerHTML = "";
-  for (const [id, label] of TABS) {
-    const t = document.createElement("button");
-    t.className = "tab" + (state.page === id ? " active" : "");
-    t.textContent = label;
-    if (id === "resources" && state.config && state.config.resources && state.config.resources.length) {
-      const b = document.createElement("span");
-      b.className = "badge";
-      b.textContent = state.config.resources.length;
-      t.appendChild(b);
+
+  /* ensure the section containing the current page stays expanded */
+  for (const entry of NAV) {
+    if (!Array.isArray(entry) && entry.items.some(([id]) => id === state.page)) {
+      sidebarCollapsed.delete(entry.section);
     }
-    t.addEventListener("click", () => switchPage(id));
-    nav.appendChild(t);
+  }
+
+  for (const entry of NAV) {
+    if (Array.isArray(entry)) {
+      const [id, label] = entry;
+      const t = document.createElement("button");
+      t.className = "tab" + (state.page === id ? " active" : "");
+      t.textContent = label;
+      if (id === "resources" && state.config && state.config.resources && state.config.resources.length) {
+        const b = document.createElement("span");
+        b.className = "badge";
+        b.textContent = state.config.resources.length;
+        t.appendChild(b);
+      }
+      t.addEventListener("click", () => switchPage(id));
+      nav.appendChild(t);
+    } else {
+      const li = document.createElement("div");
+      li.className = "sidebar-section" + (sidebarCollapsed.has(entry.section) ? " collapsed" : "");
+
+      const head = document.createElement("div");
+      head.className = "sidebar-section-head";
+      head.addEventListener("click", () => {
+        if (sidebarCollapsed.has(entry.section)) sidebarCollapsed.delete(entry.section);
+        else sidebarCollapsed.add(entry.section);
+        renderTabs();
+      });
+      const chev = document.createElement("span");
+      chev.className = "sidebar-chevron";
+      chev.textContent = sidebarCollapsed.has(entry.section) ? "▸" : "▾";
+      const title = document.createElement("span");
+      title.className = "sidebar-section-title";
+      title.textContent = entry.section;
+      head.append(chev, title);
+      li.appendChild(head);
+
+      if (!sidebarCollapsed.has(entry.section)) {
+        const sub = document.createElement("div");
+        sub.className = "sidebar-section-items";
+        for (const [id, label] of entry.items) {
+          const t = document.createElement("button");
+          t.className = "tab tab-sub" + (state.page === id ? " active" : "");
+          t.textContent = label;
+          if (id === "resources" && state.config && state.config.resources && state.config.resources.length) {
+            const b = document.createElement("span");
+            b.className = "badge";
+            b.textContent = state.config.resources.length;
+            t.appendChild(b);
+          }
+          t.addEventListener("click", () => switchPage(id));
+          sub.appendChild(t);
+        }
+        li.appendChild(sub);
+      }
+      nav.appendChild(li);
+    }
+  }
+}
+
+function syncTopbar() {
+  for (const id of ["validate", "preview", "raw"]) {
+    const el = $("#btn-" + id);
+    if (el) el.classList.toggle("active", state.page === id);
   }
 }
 
@@ -770,6 +998,7 @@ function switchPage(id) {
   state.resource = null;
   state.pageName = null;
   renderTabs();
+  syncTopbar();
   renderPage();
 }
 
@@ -781,6 +1010,7 @@ function renderPage() {
     navigation: pageNavigation,
     resources: pageResources,
     pages: pagePages,
+    schema: pageSchema,
     validate: pageValidate,
     preview: pagePreview,
     raw: pageRaw,
@@ -800,8 +1030,8 @@ function pagePanel() {
   textField(g, "Name", c.panel, "name");
   textField(g, "ID", c.panel, "id");
   textField(g, "Path", c.panel, "path");
-  textField(g, "Logo", c.panel.brand, "logo");
-  textField(g, "Favicon", c.panel.brand, "favicon");
+  imageField(g, "Logo", c.panel.brand, "logo");
+  imageField(g, "Favicon", c.panel.brand, "favicon");
   colorField(g, "Primary color", c.panel.brand.colors, "primary", "#6366f1");
   colorField(g, "Secondary color", c.panel.brand.colors, "secondary", "#8b5cf6");
   numField(g, "Sidebar width", c.panel.layout.sidebar, "width");
@@ -1047,23 +1277,40 @@ function pageNavigation() {
       openModal("Edit group: " + (group.group || "(unnamed)"), (body, ok, cancel, close) => {
         const g = gridWrap(cardEl(body));
         textField(g, "Group name", group, "group");
-        textField(g, "Icon", group, "icon");
+        iconSelectField(g, "Icon", group, "icon");
         numField(g, "Sort", group, "sort");
         ok.addEventListener("click", () => { close(); markDirty(); rerender(); });
         cancel.textContent = "Cancel";
       });
     });
     const addI = mkButton("+ Item", () => {
-      group.items.push({ type: "resource" });
+      const item = { type: "resource" };
+      group.items.push(item);
       markDirty();
-      rerender();
+      navItemModal(c, item, () => { rerender(); });
     });
     const delG = mkButton("✕", () => confirmModal(`Delete navigation group "${group.group}"?`, () => {
       c.navigation.splice(gi, 1);
       markDirty();
       rerender();
     }));
-    actions.append(editG, addI, delG);
+
+    /* move group up / down within navigation */
+    const mvUpG = mkButton("▲", () => {
+      if (gi === 0) return;
+      [c.navigation[gi - 1], c.navigation[gi]] = [c.navigation[gi], c.navigation[gi - 1]];
+      markDirty();
+      rerender();
+    });
+    mvUpG.title = "Move group up";
+    const mvDnG = mkButton("▼", () => {
+      if (gi === c.navigation.length - 1) return;
+      [c.navigation[gi], c.navigation[gi + 1]] = [c.navigation[gi + 1], c.navigation[gi]];
+      markDirty();
+      rerender();
+    });
+    mvDnG.title = "Move group down";
+    actions.append(mvUpG, mvDnG, editG, addI, delG);
 
     head.append(chev, title, meta, actions);
     li.appendChild(head);
@@ -1145,7 +1392,23 @@ function pageNavigation() {
         markDirty();
         rerender();
       }));
-      itActions.append(editI, mvI, delI);
+
+      /* move item up / down within its group */
+      const mvUpI = mkButton("▲", () => {
+        if (ii === 0) return;
+        [group.items[ii - 1], group.items[ii]] = [group.items[ii], group.items[ii - 1]];
+        markDirty();
+        rerender();
+      });
+      mvUpI.title = "Move item up";
+      const mvDnI = mkButton("▼", () => {
+        if (ii === group.items.length - 1) return;
+        [group.items[ii], group.items[ii + 1]] = [group.items[ii + 1], group.items[ii]];
+        markDirty();
+        rerender();
+      });
+      mvDnI.title = "Move item down";
+      itActions.append(mvUpI, mvDnI, editI, mvI, delI);
 
       itemLi.append(badge, label, metaEl);
       if (item.opens_in_new_tab) {
@@ -1387,51 +1650,96 @@ function renderResourceList() {
   if (!Array.isArray(c.resources)) c.resources = [];
   const root = content();
   h2(root, "Resources");
-  c.resources.forEach((r, idx) => {
-    const card = cardEl(root);
-    const head = document.createElement("div");
-    head.className = "toolbar";
-    const t = document.createElement("h3");
-    t.style.margin = "0";
-    t.textContent = r.name;
-    if (r.label) {
-      const lbl = document.createElement("span");
-      lbl.className = "mono";
-      lbl.textContent = "— " + r.label;
-      t.appendChild(lbl);
-    }
-    head.appendChild(t);
-    const spacer = document.createElement("div");
-    spacer.className = "spacer";
-    head.appendChild(spacer);
-    const editBtn = btn("Edit", "small");
-    editBtn.addEventListener("click", () => renderResourceEditor(r.name));
-    const del = btn("Delete", "danger small");
-    del.addEventListener("click", () => confirmModal(`Delete resource "${r.name}"?`, () => {
-      c.resources.splice(idx, 1);
-      markDirty();
-      renderResourceList();
-    }));
-    head.append(editBtn, del);
-    card.appendChild(head);
 
-    const g = gridWrap(card);
-    textField(g, "Label", r, "label");
-    textField(g, "Icon", r, "icon");
-    textField(g, "Group", r, "group");
-    textField(g, "Table", r, "table");
-    textField(g, "ID type", r, "id_type");
-    textField(g, "ID column", r, "id_column");
-    boolField(g, "Import CSV", r, "import_csv");
-  });
-
+  const toolbar = document.createElement("div");
+  toolbar.className = "toolbar";
+  const si = document.createElement("input");
+  si.type = "search";
+  si.placeholder = "Search resources by name…";
+  si.spellcheck = false;
+  si.value = state.resourceSearch;
+  toolbar.appendChild(si);
   const add = btn("+ Add resource", "primary");
   add.addEventListener("click", () => inputModal("Add resource", "Resource name (PascalCase)", "", (name) => {
     c.resources.push({ name });
     markDirty();
     renderResourceList();
   }));
-  root.appendChild(add);
+  toolbar.appendChild(add);
+  root.appendChild(toolbar);
+
+  const list = [...(c.resources || [])].sort((a, b) => {
+    const na = (a.name || "").toLowerCase();
+    const nb = (b.name || "").toLowerCase();
+    return na < nb ? -1 : na > nb ? 1 : 0;
+  });
+  const term = state.resourceSearch.toLowerCase();
+  const filtered = term
+    ? list.filter((r) => (r.name || "").toLowerCase().includes(term) || (r.label || "").toLowerCase().includes(term))
+    : list;
+
+  const table = document.createElement("table");
+  table.className = "rows";
+  const thead = document.createElement("thead");
+  const hr = document.createElement("tr");
+  for (const h of ["Name", "Label", "Table", "ID column", "Actions"]) {
+    const th = document.createElement("th");
+    th.textContent = h;
+    hr.appendChild(th);
+  }
+  thead.appendChild(hr);
+  table.appendChild(thead);
+
+  const tbody = document.createElement("tbody");
+  if (filtered.length === 0) {
+    const tr = document.createElement("tr");
+    const td = document.createElement("td");
+    td.colSpan = 5;
+    td.textContent = "No resources.";
+    td.style.textAlign = "center";
+    td.style.color = "var(--text-faint)";
+    td.style.padding = "20px";
+    tr.appendChild(td);
+    tbody.appendChild(tr);
+  } else {
+    for (const r of filtered) {
+      const tr = document.createElement("tr");
+      const tdName = document.createElement("td");
+      tdName.textContent = r.name;
+      const tdLabel = document.createElement("td");
+      tdLabel.textContent = r.label || "";
+      const tdTable = document.createElement("td");
+      tdTable.textContent = r.table || r.name;
+      const tdId = document.createElement("td");
+      tdId.textContent = r.id_column || "id";
+      const tdAct = document.createElement("td");
+      tdAct.className = "row-actions";
+      const viewBtn = mkButton("View", () => renderResourceEditor(r.name));
+      const editBtn = mkButton("Edit", () => renderResourceEditor(r.name));
+      const delBtn = btn("Delete", "danger small");
+      delBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        confirmModal(`Delete resource "${r.name}"?`, () => {
+          const idx = c.resources.indexOf(r);
+          if (idx >= 0) {
+            c.resources.splice(idx, 1);
+            markDirty();
+            renderResourceList();
+          }
+        });
+      });
+      tdAct.append(viewBtn, editBtn, delBtn);
+      tr.append(tdName, tdLabel, tdTable, tdId, tdAct);
+      tbody.appendChild(tr);
+    }
+  }
+  table.appendChild(tbody);
+  root.appendChild(table);
+
+  si.addEventListener("input", () => {
+    state.resourceSearch = si.value;
+    renderResourceList();
+  });
 }
 
 function resourceCollection(root, r, key, label, schema, title) {
@@ -1476,7 +1784,7 @@ function renderResourceEditor(name) {
   const g = gridWrap(card);
   textField(g, "Name", r, "name");
   textField(g, "Label", r, "label");
-  textField(g, "Icon", r, "icon");
+  iconSelectField(g, "Icon", r, "icon");
   textField(g, "Group", r, "group");
   textField(g, "Table", r, "table");
   textField(g, "ID type", r, "id_type");
@@ -1658,6 +1966,310 @@ function renderResourceEditor(name) {
 function pageResources() {
   if (state.resource) renderResourceEditor(state.resource);
   else renderResourceList();
+}
+
+/* ---------- page: Schema browser ---------- */
+
+let schemaSelectedTable = null; // table whose data modal is open
+
+async function pageSchema() {
+  const c = state.config;
+  if (!c.schema || !Array.isArray(c.schema.tables) || c.schema.tables.length === 0) {
+    const root = content();
+    h2(root, "Schema");
+    const p = document.createElement("p");
+    p.className = "mono";
+    p.textContent = "No schema block captured in the config (run `yaga init --db`).";
+    root.appendChild(p);
+    return;
+  }
+
+  const tables = [...c.schema.tables].sort((a, b) => {
+    const na = (a.name || "").toLowerCase();
+    const nb = (b.name || "").toLowerCase();
+    return na < nb ? -1 : na > nb ? 1 : 0;
+  });
+
+  const root = content();
+  h2(root, "Schema browser");
+
+  const toolbar = document.createElement("div");
+  toolbar.className = "toolbar";
+  const si = document.createElement("input");
+  si.type = "search";
+  si.placeholder = "Search tables…";
+  si.spellcheck = false;
+  si.value = state.schemaSearch || "";
+  toolbar.appendChild(si);
+  const hint = document.createElement("span");
+  hint.className = "mono";
+  hint.textContent = tables.length + " table" + (tables.length === 1 ? "" : "s");
+  toolbar.appendChild(hint);
+  root.appendChild(toolbar);
+
+  const container = document.createElement("div");
+  root.appendChild(container);
+
+  function render() {
+    container.innerHTML = "";
+    const term = si.value.toLowerCase();
+    const filtered = tables.filter((t) =>
+      (t.name || "").toLowerCase().includes(term)
+    );
+
+    if (filtered.length === 0) {
+      const p = document.createElement("p");
+      p.className = "mono";
+      p.textContent = "No matching tables.";
+      container.appendChild(p);
+      return;
+    }
+
+    const tableEl = document.createElement("table");
+    tableEl.className = "rows";
+    const thead = document.createElement("thead");
+    const hr = document.createElement("tr");
+    for (const h of ["Name", "PK", "View", "Columns", "FKs", "Actions"]) {
+      const th = document.createElement("th");
+      th.textContent = h;
+      hr.appendChild(th);
+    }
+    thead.appendChild(hr);
+    tableEl.appendChild(thead);
+
+    const tbody = document.createElement("tbody");
+    for (const t of filtered) {
+      const tr = document.createElement("tr");
+
+      const tdName = document.createElement("td");
+      tdName.textContent = t.name;
+
+      const tdPk = document.createElement("td");
+      tdPk.textContent = t.pk || "-";
+
+      const tdView = document.createElement("td");
+      tdView.textContent = t.view ? "view" : "";
+
+      const tdCols = document.createElement("td");
+      tdCols.textContent = (t.columns || []).length;
+
+      const tdFks = document.createElement("td");
+      tdFks.textContent = (t.foreign_keys || []).length;
+
+      const tdAct = document.createElement("td");
+      tdAct.className = "row-actions";
+
+      const viewBtn = mkButton("View", () => openSchemaModal(t));
+      const dataBtn = mkButton("Show data", () => loadSchemaData(t.name));
+      tdAct.append(viewBtn, dataBtn);
+
+      tr.append(tdName, tdPk, tdView, tdCols, tdFks, tdAct);
+      tbody.appendChild(tr);
+    }
+    tableEl.appendChild(tbody);
+    container.appendChild(tableEl);
+  }
+
+  si.addEventListener("input", render);
+  render();
+}
+
+async function loadSchemaData(tableName) {
+  const root = content();
+  // Keep the page context but show a loading state in a modal-like area.
+  // We render a dedicated data view replacing current content.
+  h2(root, "Data: " + tableName);
+  const back = btn("← Schema", "small");
+  back.addEventListener("click", () => { pageSchema(); });
+  root.appendChild(back);
+
+  const limitBar = document.createElement("div");
+  limitBar.className = "toolbar";
+  const li = document.createElement("input");
+  li.type = "number";
+  li.min = "1";
+  li.max = "1000";
+  li.value = "10";
+  li.style.width = "80px";
+  const loadBtn = btn("Load", "small");
+  limitBar.appendChild(li);
+  limitBar.appendChild(document.createTextNode(" rows"));
+  limitBar.appendChild(loadBtn);
+  root.appendChild(limitBar);
+
+  const dataContainer = document.createElement("div");
+  root.appendChild(dataContainer);
+
+  async function doLoad() {
+    const n = parseInt(li.value, 10) || 10;
+    let data;
+    try {
+      data = await api("GET", "/api/schema-sample/" + encodeURIComponent(tableName) + "?limit=" + n);
+    } catch (e) {
+      dataContainer.innerHTML = "";
+      const err = document.createElement("div");
+      err.className = "mono";
+      err.style.color = "var(--red)";
+      err.textContent = "Failed to load data: " + e.message;
+      dataContainer.appendChild(err);
+      return;
+    }
+    renderData(data);
+  }
+
+  loadBtn.addEventListener("click", doLoad);
+
+  function renderData(data) {
+    dataContainer.innerHTML = "";
+    const info = document.createElement("div");
+    info.className = "mono";
+    info.textContent = data.table + " — " + data.count + " row" + (data.count === 1 ? "" : "s") + " (limit " + data.limit + ")";
+    dataContainer.appendChild(info);
+
+    if (!data.rows || data.rows.length === 0) {
+      const p = document.createElement("p");
+      p.className = "mono";
+      p.textContent = "No data. The in-memory stub is empty — seed it from a live database first.";
+      dataContainer.appendChild(p);
+      return;
+    }
+
+    const cols = Object.keys(data.rows[0]);
+    const tableEl = document.createElement("table");
+    tableEl.className = "rows";
+    const thead = document.createElement("thead");
+    const hr = document.createElement("tr");
+    for (const c of cols) {
+      const th = document.createElement("th");
+      th.textContent = c;
+      hr.appendChild(th);
+    }
+    thead.appendChild(hr);
+    tableEl.appendChild(thead);
+
+    const tbody = document.createElement("tbody");
+    for (const row of data.rows) {
+      const tr = document.createElement("tr");
+      for (const c of cols) {
+        const td = document.createElement("td");
+        const v = row[c];
+        td.textContent = v === null ? "NULL" : String(v);
+        tr.appendChild(td);
+      }
+      tbody.appendChild(tr);
+    }
+    tableEl.appendChild(tbody);
+    dataContainer.appendChild(tableEl);
+  }
+
+  doLoad();
+}
+
+function openSchemaModal(t) {
+  schemaSelectedTable = t;
+  openModal("Schema: " + t.name, (body, ok, cancel, close) => {
+    const g = gridWrap(cardEl(body));
+
+    // Table info row
+    const infoRow = document.createElement("div");
+    infoRow.className = "field";
+    const infoLabel = document.createElement("label");
+    infoLabel.textContent = "Table";
+    const infoVal = document.createElement("span");
+    infoVal.textContent = t.name + (t.view ? "  (view)" : "");
+    infoVal.style.fontWeight = "600";
+    infoRow.append(infoLabel, infoVal);
+    g.appendChild(infoRow);
+
+    const pkRow = document.createElement("div");
+    pkRow.className = "field";
+    const pkLabel = document.createElement("label");
+    pkLabel.textContent = "Primary key";
+    const pkVal = document.createElement("span");
+    pkVal.textContent = t.pk || "-";
+    pkRow.append(pkLabel, pkVal);
+    g.appendChild(pkRow);
+
+    // Columns
+    if (Array.isArray(t.columns) && t.columns.length) {
+      const colHead = document.createElement("div");
+      colHead.className = "sub-heading";
+      colHead.textContent = "Columns";
+      body.appendChild(colHead);
+
+      const colTable = document.createElement("table");
+      colTable.className = "rows";
+      const cThead = document.createElement("thead");
+      const cHr = document.createElement("tr");
+      for (const h of ["Name", "Type", "PK"]) {
+        const th = document.createElement("th");
+        th.textContent = h;
+        cHr.appendChild(th);
+      }
+      cThead.appendChild(cHr);
+      colTable.appendChild(cThead);
+
+      const cTbody = document.createElement("tbody");
+      for (const col of t.columns) {
+        const ctr = document.createElement("tr");
+        const c1 = document.createElement("td");
+        c1.textContent = col.name;
+        const c2 = document.createElement("td");
+        c2.textContent = col.type;
+        const c3 = document.createElement("td");
+        c3.textContent = col.primary_key ? "✓" : "";
+        ctr.append(c1, c2, c3);
+        cTbody.appendChild(ctr);
+      }
+      colTable.appendChild(cTbody);
+      body.appendChild(colTable);
+    }
+
+    // Foreign keys
+    if (Array.isArray(t.foreign_keys) && t.foreign_keys.length) {
+      const fkHead = document.createElement("div");
+      fkHead.className = "sub-heading";
+      fkHead.textContent = "Foreign keys";
+      body.appendChild(fkHead);
+
+      const fkTable = document.createElement("table");
+      fkTable.className = "rows";
+      const fThead = document.createElement("thead");
+      const fHr = document.createElement("tr");
+      for (const h of ["Column", "References", "Label"]) {
+        const th = document.createElement("th");
+        th.textContent = h;
+        fHr.appendChild(th);
+      }
+      fThead.appendChild(fHr);
+      fkTable.appendChild(fThead);
+
+      const fTbody = document.createElement("tbody");
+      for (const fk of t.foreign_keys) {
+        const ftr = document.createElement("tr");
+        const f1 = document.createElement("td");
+        f1.textContent = fk.column;
+        const f2 = document.createElement("td");
+        f2.textContent = fk.foreign_table + "." + fk.foreign_column;
+        const f3 = document.createElement("td");
+        f3.textContent = fk.label || "";
+        ftr.append(f1, f2, f3);
+        fTbody.appendChild(ftr);
+      }
+      fkTable.appendChild(fTbody);
+      body.appendChild(fkTable);
+    }
+
+    if ((!t.columns || t.columns.length === 0) && (!t.foreign_keys || t.foreign_keys.length === 0)) {
+      const p = document.createElement("p");
+      p.className = "mono";
+      p.textContent = "No column or foreign key information captured.";
+      body.appendChild(p);
+    }
+
+    ok.classList.add("hidden");
+    cancel.textContent = "Close";
+  });
 }
 
 /* ---------- page: Pages ---------- */

@@ -116,10 +116,12 @@ AI-assisted edit (experimental feature only):
 
 WEdit (wedit only):
   --port N       Web editor listen port (default: 9090)
-  --open         Open the editor in the default browser after binding`)
+  --open         Open the editor in the default browser after binding
+  --db, -d DSN   Live database connection for the Schema browser's
+                 "Show data" action (postgres://..., sqlserver://...
+                 or sqlite file path)`)
 }
 
-// parseGlobalFlags scans os.Args[2:] for the global flags shared by all
 // subcommands. Flags that take a value (--config/-c, --out/-o, --db/-d,
 // --admin-password/-p) consume the following argument.
 // Returns: configPath (YAML config file path, default "yaga.yaml"),
