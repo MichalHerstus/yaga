@@ -237,6 +237,9 @@ type FormData struct {
 	// It is submitted as a hidden _return field so the POST handler honors it
 	// without needing the query string.
 	Return string
+	// ViewMode, when true, renders the form read-only (disabled inputs, no
+	// submit button) for viewing a child record in a modal instead of editing it.
+	ViewMode bool
 }
 
 type PageData struct {

@@ -62,6 +62,19 @@ func (g *Generator) generateResource(r types.Resource) error {
 			return err
 		}
 	}
+	// D14: modal form handlers — always-on modal editing for child records.
+	// ModalForm renders /{name}/{id}/modal (view or edit), ModalCreate renders
+	// /{name}/new/modal (create with optional FK seed from query params).
+	if r.Form != nil && r.Form.Update != nil {
+		if err := g.generateModalFormHandler(dir, r); err != nil {
+			return err
+		}
+	}
+	if r.Form != nil && r.Form.Create != nil {
+		if err := g.generateModalCreateHandler(dir, r); err != nil {
+			return err
+		}
+	}
 	// D14: the loadChildLines helper is package-scoped, so it lives in its own
 	// file (shared by detail.go/update.go) instead of being duplicated.
 	if len(r.Children) > 0 {
@@ -1777,6 +1790,187 @@ func (g *Generator) generateFormHandlers(dir string, r types.Resource) error {
 		}
 	}
 	return nil
+}
+
+// generateModalFormHandler writes modal.go: a ModalForm(db) handler that renders
+// the edit/view form of a single record inside a modal (no layoutviews.Base
+// wrapper — the HTML is injected into the master page's modal container).
+// GET /{name}/{id}/modal?view=1&return=/panel/header/1/edit
+// Params: dir (resource package directory), r (the resource definition).
+func (g *Generator) generateModalFormHandler(dir string, r types.Resource) error {
+	pkgName := resourcePkgName(r.Name)
+	panelPath := g.Config.Panel.Path
+	queryName := "GetByID"
+	if r.Detail != nil && r.Detail.Query != "" {
+		queryName = r.Detail.Query
+	}
+	idGoType := g.idGoTypeForResource(r)
+
+	paramFields := r.Form.Update.Fields
+	if paramFields == nil {
+		paramFields = r.Form.Create.Fields
+	}
+
+	var optLoadCode string
+	var optVars, copyVars map[string]string
+	optVars, copyVars, optLoadCode = g.buildOptionsLoader(r, paramFields)
+
+	seedPickers := g.seedPickersOf(r, paramFields)
+	lockCode := ""
+	if len(seedPickers) > 0 {
+		var lockLines []string
+		for f := range seedPickers {
+			lockLines = append(lockLines, fmt.Sprintf(`        locked[%q] = true
+`, f))
+		}
+		lockCode = "        locked := map[string]bool{}\n" + strings.Join(lockLines, "")
+	}
+
+	fieldDefs := formFieldDefsWithOpts(paramFields, optVars, copyVars, seedPickers)
+
+	code := fmt.Sprintf(`package %s
+
+import (
+    "database/sql"
+    "fmt"
+    "net/http"
+    "strconv"
+    %q
+    %q
+    %q
+    auth %q
+    httperr %q
+)
+
+func ModalForm(db *sql.DB) http.HandlerFunc {
+    return func(w http.ResponseWriter, r *http.Request) {
+        idStr := r.PathValue("id")
+        id, err := strconv.Atoi(idStr)
+        if err != nil {
+            http.Error(w, "invalid id", http.StatusBadRequest)
+            return
+        }
+
+        item, err := data.New(db).%s(r.Context(), %s(id))
+        if err != nil {
+            httperr.NotFound(w, err)
+            return
+        }
+
+%s
+%s
+        viewMode := r.URL.Query().Get("view") == "1"
+        vd := &viewmodels.FormData{
+            Item:      item,
+            Fields:    []viewmodels.ColumnDef{
+                %s,
+            },
+            Action:    fmt.Sprintf("%s/%s/%%d", %q, %q, id),
+            Method:    "POST",
+            Resource:  %q,
+            PanelPath: %q,
+            IsCreate:  false,
+            CSRFToken: auth.CSRFToken(r, w),
+            Return:    r.URL.Query().Get("return"),
+            ViewMode:  viewMode,
+        }
+        views.ModalForm(vd).Render(r.Context(), w)
+    }
+}
+`, pkgName,
+		g.moduleImport("internal/data"), g.moduleImport("internal/viewmodels"), g.moduleImport("internal/views/resources/"+pkgName),
+		g.moduleImport("internal/panel/auth"), g.moduleImport("internal/panel/httperr"),
+		queryName, idGoType,
+		optLoadCode,
+		lockCode,
+		fieldDefs,
+		panelPath, pkgName, panelPath, pkgName,
+		r.Name,
+		panelPath,
+	)
+
+	return os.WriteFile(filepath.Join(dir, "modal.go"), []byte(code), 0644)
+}
+
+// generateModalCreateHandler writes modalcreate.go: a ModalCreate(db) handler that
+// renders the create form of a single record inside a modal (no layoutviews.Base
+// wrapper). GET /{name}/new/modal?{fk}={parentId}&return=/panel/header/1/edit
+// Params: dir (resource package directory), r (the resource definition).
+func (g *Generator) generateModalCreateHandler(dir string, r types.Resource) error {
+	pkgName := resourcePkgName(r.Name)
+	panelPath := g.Config.Panel.Path
+	createPath := fmt.Sprintf("%s/%s/new", panelPath, pkgName)
+
+	paramFields := r.Form.Create.Fields
+
+	var optLoadCode string
+	var optVars, copyVars map[string]string
+	optVars, copyVars, optLoadCode = g.buildOptionsLoader(r, paramFields)
+
+	seedPickers := g.seedPickersOf(r, paramFields)
+	seedCode := ""
+	itemExpr := "make(map[string]interface{})"
+	if len(seedPickers) > 0 {
+		var seedLines []string
+		for f := range seedPickers {
+			seedLines = append(seedLines, fmt.Sprintf(`        if v := r.URL.Query().Get(%q); v != "" {
+            item[%q] = v
+            locked[%q] = true
+        }
+    `, f, f, f))
+		}
+		seedCode = "        item := make(map[string]interface{})\n        locked := map[string]bool{}\n" + strings.Join(seedLines, "")
+		itemExpr = "item"
+	}
+
+	fieldDefs := formFieldDefsWithOpts(paramFields, optVars, copyVars, seedPickers)
+
+	code := fmt.Sprintf(`package %s
+
+import (
+    "database/sql"
+    "fmt"
+    "net/http"
+    %q
+    %q
+    %q
+    auth %q
+    httperr %q
+)
+
+func ModalCreate(db *sql.DB) http.HandlerFunc {
+    return func(w http.ResponseWriter, r *http.Request) {
+%s
+%s
+        vd := &viewmodels.FormData{
+            Item:      %s,
+            Fields:    []viewmodels.ColumnDef{
+                %s,
+            },
+            Action:    %q,
+            Method:    "POST",
+            Resource:  %q,
+            PanelPath: %q,
+            IsCreate:  true,
+            CSRFToken: auth.CSRFToken(r, w),
+            Return:    r.URL.Query().Get("return"),
+        }
+        views.ModalForm(vd).Render(r.Context(), w)
+    }
+}
+`, pkgName,
+		g.moduleImport("internal/data"), g.moduleImport("internal/viewmodels"), g.moduleImport("internal/views/resources/"+pkgName),
+		g.moduleImport("internal/panel/auth"), g.moduleImport("internal/panel/httperr"),
+		optLoadCode,
+		seedCode,
+		itemExpr,
+		fieldDefs,
+		createPath,
+		r.Name,
+		panelPath,
+	)
+
+	return os.WriteFile(filepath.Join(dir, "modalcreate.go"), []byte(code), 0644)
 }
 
 // resourceHasPicker reports whether any create or update form field of a

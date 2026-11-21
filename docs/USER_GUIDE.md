@@ -538,6 +538,19 @@ expression **at query time**, instead of selecting existing table columns:
         columns: [ { name: qty, label: "Qty", type: integer } ]
 ```
 
+- `children:` declares 1→many master-detail sections on a header resource (e.g.
+  Order → OrderLine). The child FK column (`column`) is auto-derived from the
+  `schema:` block's reverse foreign key when omitted; `columns` overrides the
+  child-line column list (defaults to the child resource's `list.columns`).
+- **Lines always open in inline modals.** Clicking **View** or **Edit** on a line
+  row opens a modal form on the same page — no navigation away from the header.
+  **Add Line** opens a create modal with the FK pre-seeded and locked to the
+  open header. After saving, the page reloads showing the updated lines. Delete
+  remains a full-page action that returns to the header edit via `?return=`.
+- The child resource stays fully independent: it keeps its own list/detail/form
+  and appears in navigation; its FK is only locked when opened from a parent
+  context.
+
 - `select`/`relation` fields with resolvable options render as a **modal record picker**;
   `copies:` auto-fills sibling form fields from the picked row.
 - The shared form template renders the **union** of create + update fields

@@ -114,6 +114,15 @@ func (g *Generator) generateRouter() error {
 		if res.Form != nil && res.Form.Delete != nil {
 			code += fmt.Sprintf("\t\t%sPost(\"/%s/{id}/delete\", %s.Delete(db))\n", rbacPrefix("delete"), name, name)
 		}
+		// D14: always-on modal form routes for child records — opened from the
+		// master's lines section (view/edit/create in a modal, then reload).
+		// No RBAC wrapper: reached from an already-authorized master page.
+		if res.Form != nil && res.Form.Update != nil {
+			code += fmt.Sprintf("\t\tr.Get(\"/%s/{id}/modal\", %s.ModalForm(db))\n", name, name)
+		}
+		if res.Form != nil && res.Form.Create != nil {
+			code += fmt.Sprintf("\t\tr.Get(\"/%s/new/modal\", %s.ModalCreate(db))\n", name, name)
+		}
 		if len(res.Actions) > 0 {
 			actionPrefix := "r."
 			if hasActionPolicies(res) {

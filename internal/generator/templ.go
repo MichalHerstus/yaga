@@ -118,6 +118,9 @@ func (g *Generator) generateResourceViews(r types.Resource) error {
 		if err := g.generateFormTempl(viewDir, r); err != nil {
 			return err
 		}
+		if err := g.generateModalFormTempl(viewDir, r); err != nil {
+			return err
+		}
 	}
 	if r.Card != nil {
 		if err := g.generateCardTempl(viewDir, r); err != nil {
@@ -934,19 +937,24 @@ func pickerMarkup(f types.Field, label string) string {
 // detail or edit template. sec is the template loop variable bound to a
 // viewmodels.ChildLinesData. withActions adds per-row Edit + Delete links (and
 // an "Add Line" button) for the header's edit form; without actions only a
-// "View" link to the child's detail is shown. Reference style only — the
-// prefixed class names are all stock Tailwind, so TestGenerateStylesEmbedded
-// stays green without a rebuild.
+// "View" link to the child's detail is shown.
+// All line navigation (View, Edit, Add Line) opens in an inline modal instead
+// of navigating away — the modal content is fetched from the child's
+// /{child}/{id}/modal or /{child}/new/modal endpoint and injected into the
+// shared modal container. After save, the server redirects back to the header
+// edit (?return=) and the page reloads, showing the updated lines.
+// Reference style only — the prefixed class names are all stock Tailwind, so
+// TestGenerateStylesEmbedded stays green without a rebuild.
 func childLinesSection(withActions bool) string {
 	head := ""
-	rowActions := `                                    <a href={ templ.SafeURL(fmt.Sprintf("%s/%s/%s", sec.PanelPath, sec.ResourceLower, viewmodels.Stringify(row[sec.IDColumn]))) } class="text-brand-primary hover:opacity-90">View</a>`
+	rowActions := `                                    <button type="button" data-modal-url={ templ.SafeURL(fmt.Sprintf("%s/%s/%s/modal?view=1&return=%s", sec.PanelPath, sec.ResourceLower, viewmodels.Stringify(row[sec.IDColumn]), sec.ReturnURL)) } class="text-brand-primary hover:opacity-90">View</button>`
 	if withActions {
 		head = `                <div class="mb-3">
-                    <a href={ templ.SafeURL(fmt.Sprintf("%s/%s/new?%s=%s", sec.PanelPath, sec.ResourceLower, sec.FKColumn, sec.ParentID)) } class="bg-brand-primary text-white px-4 py-2 rounded-lg text-sm hover:opacity-90">Add Line</a>
+                    <button type="button" data-modal-url={ templ.SafeURL(fmt.Sprintf("%s/%s/new/modal?%s=%s&return=%s", sec.PanelPath, sec.ResourceLower, sec.FKColumn, sec.ParentID, sec.ReturnURL)) } class="bg-brand-primary text-white px-4 py-2 rounded-lg text-sm hover:opacity-90">Add Line</button>
                 </div>
 `
 		rowActions = `                                    <div class="flex items-center gap-2">
-                                        <a href={ templ.SafeURL(fmt.Sprintf("%s/%s/%s/edit?%s=%s&return=%s", sec.PanelPath, sec.ResourceLower, viewmodels.Stringify(row[sec.IDColumn]), sec.FKColumn, sec.ParentID, sec.ReturnURL)) } class="text-brand-primary hover:opacity-90">Edit</a>
+                                        <button type="button" data-modal-url={ templ.SafeURL(fmt.Sprintf("%s/%s/%s/modal?return=%s", sec.PanelPath, sec.ResourceLower, viewmodels.Stringify(row[sec.IDColumn]), sec.ReturnURL)) } class="text-brand-primary hover:opacity-90">Edit</button>
                                         <form action={ templ.SafeURL(fmt.Sprintf("%s/%s/%s/delete?return=%s", sec.PanelPath, sec.ResourceLower, viewmodels.Stringify(row[sec.IDColumn]), sec.ReturnURL)) } method="POST" class="inline" onsubmit="return confirm('Delete this line?')">
                                             <input type="hidden" name="_csrf" value={ sec.CSRFToken } />
                                             <button type="submit" class="text-red-600 hover:opacity-90">Delete</button>
@@ -980,7 +988,221 @@ func childLinesSection(withActions bool) string {
                     </table>
                 </div>
             </div>
+` + modalContainerAndJS()
+}
+
+// modalContainerAndJS returns the shared modal container markup plus a small
+// IIFE-scoped script that opens the modal when a [data-modal-url] button is
+// clicked, fetches the modal content from the server, injects it, and closes
+// on X / backdrop / Escape. Emitted once per page that renders child lines.
+func modalContainerAndJS() string {
+	return `
+<div id="gf-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50 p-4">
+    <div class="bg-white dark:bg-gray-800 rounded-lg shadow-xl w-full max-w-lg flex flex-col max-h-[80vh]">
+        <div class="flex items-center justify-between mb-4">
+            <h2 class="text-lg font-bold text-gray-900 dark:text-gray-100" id="gf-modal-title"></h2>
+            <button type="button" id="gf-modal-close" class="text-gray-500 hover:text-gray-900 dark:hover:text-gray-100 text-2xl leading-none">&times;</button>
+        </div>
+        <div id="gf-modal-content" class="flex-1 overflow-y-auto"></div>
+    </div>
+</div>
+<script>
+    (function() {
+        var gfModal = document.getElementById('gf-modal');
+        var gfModalContent = document.getElementById('gf-modal-content');
+        var gfModalClose = document.getElementById('gf-modal-close');
+        if (!gfModal || !gfModalContent || !gfModalClose) {
+            return;
+        }
+        function gfClose() {
+            gfModal.classList.add('hidden');
+            gfModalContent.innerHTML = '';
+            document.getElementById('gf-modal-title').textContent = '';
+        }
+        document.querySelectorAll('[data-modal-url]').forEach(function(btn) {
+            btn.addEventListener('click', function() {
+                var url = btn.getAttribute('data-modal-url');
+                if (!url) return;
+                fetch(url).then(function(resp) {
+                    return resp.text();
+                }).then(function(html) {
+                    gfModalContent.innerHTML = html;
+                    gfModal.classList.remove('hidden');
+                });
+            });
+        });
+        gfModalClose.addEventListener('click', gfClose);
+        gfModal.addEventListener('click', function(e) {
+            if (e.target === gfModal) gfClose();
+        });
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape' && !gfModal.classList.contains('hidden')) gfClose();
+        });
+    })();
+</script>
 `
+}
+
+// generateModalFormTempl writes modalform.templ for a resource: a form rendered
+// inside a modal dialog (no layoutviews.Base wrapper — the HTML is injected into
+// the master page's gf-modal container). Supports ViewMode (read-only, disabled
+// inputs, no submit) for viewing a child record, and editable mode for editing
+// or creating one. Both ModalForm and ModalCreate handlers render this templ.
+// Params: dir (resource view directory), r (the resource definition).
+func (g *Generator) generateModalFormTempl(dir string, r types.Resource) error {
+	templName := goIdent(r.Name) + "ModalForm"
+
+	// The modal form is rendered by ModalForm (update fields, IsCreate=false)
+	// and ModalCreate (create fields, IsCreate=true). Render whatever fields
+	// data.Fields contains — no IsCreate guards needed since each handler
+	// passes only its own field set.
+	var fields []types.Field
+	if r.Form.Update != nil {
+		fields = r.Form.Update.Fields
+	}
+	if fields == nil && r.Form.Create != nil {
+		fields = r.Form.Create.Fields
+	}
+
+	var inputs strings.Builder
+	hasFile := false
+	hasPicker := false
+	for _, f := range fields {
+		if f.Type == "file" || f.Type == "image" {
+			hasFile = true
+		}
+		if g.isPickerField(r, f) {
+			hasPicker = true
+		}
+
+		label := f.Label
+		if label == "" {
+			label = f.Name
+		}
+
+		disabledCond := `{ if data.ViewMode { "disabled" } }`
+
+		inputs.WriteString(fmt.Sprintf(`            <div>
+                <label for="%s" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">%s</label>
+`, f.Name, label))
+
+		if g.isPickerField(r, f) {
+			inputs.WriteString(pickerMarkup(f, label))
+		} else {
+			switch f.Type {
+			case "text":
+				inputs.WriteString(fmt.Sprintf(`                <textarea id="%s" name="%s" rows="3" class="w-full rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100 shadow-sm focus:border-brand-primary focus:ring-brand-primary sm:text-sm border px-3 py-2"%s>{ viewmodels.ItemValue(data.Item, %q) }</textarea>
+`, f.Name, f.Name, disabledCond, f.Name))
+			case "password":
+				inputs.WriteString(fmt.Sprintf(`                <input type="password" id="%s" name="%s" class="w-full rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100 shadow-sm focus:border-brand-primary focus:ring-brand-primary sm:text-sm border px-3 py-2"%s />
+`, f.Name, f.Name, disabledCond))
+			case "email":
+				inputs.WriteString(fmt.Sprintf(`                <input type="email" id="%s" name="%s" value={ viewmodels.ItemValue(data.Item, %q) } class="w-full rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100 shadow-sm focus:border-brand-primary focus:ring-brand-primary sm:text-sm border px-3 py-2"%s />
+`, f.Name, f.Name, f.Name, disabledCond))
+			case "select":
+				inputs.WriteString(fmt.Sprintf(`                <select id="%s" name="%s" class="w-full rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100 shadow-sm focus:border-brand-primary focus:ring-brand-primary sm:text-sm border px-3 py-2"%s>
+                    <option value="">Select...</option>
+                    for _, fd := range data.Fields {
+                        if fd.Name == %q {
+                            for key, label := range fd.Options {
+                                <option value={ key } if viewmodels.OptionValue(data.Item[%q]) == key { selected }>{ label }</option>
+                            }
+                        }
+                    }
+                </select>
+`, f.Name, f.Name, disabledCond, f.Name, f.Name))
+			case "boolean":
+				inputs.WriteString(fmt.Sprintf(`                <input type="checkbox" id="%s" name="%s" value="true" class="rounded border-gray-300 dark:border-gray-600 text-brand-primary focus:ring-brand-primary"%s
+                    if viewmodels.BoolValue(data.Item[%q]) {
+                        checked
+                    }
+                />
+`, f.Name, f.Name, disabledCond, f.Name))
+			case "integer", "float":
+				inputs.WriteString(fmt.Sprintf(`                <input type="number" id="%s" name="%s" value={ viewmodels.ItemValue(data.Item, %q) } class="w-full rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100 shadow-sm focus:border-brand-primary focus:ring-brand-primary sm:text-sm border px-3 py-2"%s />
+`, f.Name, f.Name, f.Name, disabledCond))
+			case "datetime":
+				inputs.WriteString(fmt.Sprintf(`                <input type="datetime-local" id="%s" name="%s" value={ viewmodels.TimeInputValue(data.Item, %q) } class="w-full rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100 shadow-sm focus:border-brand-primary focus:ring-brand-primary sm:text-sm border px-3 py-2"%s />
+`, f.Name, f.Name, f.Name, disabledCond))
+			case "date":
+				inputs.WriteString(fmt.Sprintf(`                <input type="date" id="%s" name="%s" value={ viewmodels.DateInputValue(data.Item, %q) } class="w-full rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100 shadow-sm focus:border-brand-primary focus:ring-brand-primary sm:text-sm border px-3 py-2"%s />
+`, f.Name, f.Name, f.Name, disabledCond))
+			case "file":
+				inputs.WriteString(fmt.Sprintf(`                <input type="file" id="%s" name="%s" class="w-full rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100 shadow-sm focus:border-brand-primary focus:ring-brand-primary sm:text-sm border px-3 py-2"%s />
+`, f.Name, f.Name, disabledCond))
+			case "image":
+				inputs.WriteString(fmt.Sprintf(`                <input type="file" id="%s" name="%s" accept="image/*" class="w-full rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100 shadow-sm focus:border-brand-primary focus:ring-brand-primary sm:text-sm border px-3 py-2"%s />
+`, f.Name, f.Name, disabledCond))
+			case "badge":
+				inputs.WriteString(fmt.Sprintf(`                <input type="text" id="%s" name="%s" value={ viewmodels.ItemValue(data.Item, %q) } class="w-full rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100 shadow-sm focus:border-brand-primary focus:ring-brand-primary sm:text-sm border px-3 py-2"%s placeholder="badge value" />
+`, f.Name, f.Name, f.Name, disabledCond))
+			case "relation":
+				inputs.WriteString(fmt.Sprintf(`                <input type="text" id="%s" name="%s" value={ viewmodels.ItemValue(data.Item, %q) } class="w-full rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100 shadow-sm focus:border-brand-primary focus:ring-brand-primary sm:text-sm border px-3 py-2"%s placeholder="related ID" />
+`, f.Name, f.Name, f.Name, disabledCond))
+			case "json":
+				inputs.WriteString(fmt.Sprintf(`                <textarea id="%s" name="%s" rows="5" class="w-full rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100 shadow-sm focus:border-brand-primary focus:ring-brand-primary sm:text-sm border px-3 py-2 font-mono text-xs"%s>{ viewmodels.ItemValue(data.Item, %q) }</textarea>
+`, f.Name, f.Name, disabledCond, f.Name))
+			case "gps":
+				inputs.WriteString(fmt.Sprintf(`                <input type="text" id="%s" name="%s" value={ viewmodels.ItemValue(data.Item, %q) } class="w-full rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100 shadow-sm focus:border-brand-primary focus:ring-brand-primary sm:text-sm border px-3 py-2"%s placeholder="lat, lng" />
+`, f.Name, f.Name, f.Name, disabledCond))
+			default:
+				inputs.WriteString(fmt.Sprintf(`                <input type="text" id="%s" name="%s" value={ viewmodels.ItemValue(data.Item, %q) } class="w-full rounded-md border-gray-300 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-100 shadow-sm focus:border-brand-primary focus:ring-brand-primary sm:text-sm border px-3 py-2"%s />
+`, f.Name, f.Name, f.Name, disabledCond))
+			}
+		}
+
+		if f.Required {
+			inputs.WriteString(`                <p class="text-xs text-red-500 mt-1">Required</p>
+`)
+		}
+		if f.Validation != nil {
+			if f.Validation.Min > 0 || f.Validation.Max > 0 {
+				inputs.WriteString(fmt.Sprintf(`                <p class="text-xs text-gray-500 dark:text-gray-400 mt-1">Min: %d, Max: %d</p>
+`, f.Validation.Min, f.Validation.Max))
+			}
+		}
+
+		inputs.WriteString("            </div>\n")
+	}
+
+	enctype := ""
+	if hasFile {
+		enctype = ` enctype="multipart/form-data"`
+	}
+
+	footerStr := ""
+	if hasPicker {
+		footerStr = pickerFooter()
+	}
+
+	code := fmt.Sprintf(`package views
+
+import "internal/viewmodels"
+
+templ %s(data *viewmodels.FormData) {
+    <div class="mb-4">
+        <h2 class="text-lg font-bold text-gray-900 dark:text-gray-100">
+            { if data.ViewMode { View } else { if data.IsCreate { Create } else { Edit } } } { data.Resource }
+        </h2>
+    </div>
+    <form action={ templ.SafeURL(data.Action) } method="POST"%s class="space-y-4">
+        <input type="hidden" name="_csrf" value={ data.CSRFToken } />
+        <input type="hidden" name="_return" value={ data.Return } />
+%s
+        { if !data.ViewMode {
+            <div class="flex justify-end gap-2 pt-4">
+                <button type="button" class="text-gray-500 hover:text-gray-900 dark:hover:text-gray-100" onclick="document.getElementById('gf-modal').classList.add('hidden')">Cancel</button>
+                <button type="submit" class="bg-brand-primary text-white px-6 py-2 rounded-lg text-sm hover:opacity-90">{ if data.IsCreate { Create } else { Update } }</button>
+            </div>
+        } }
+    </form>
+%s
+}
+`, templName, enctype, inputs.String(), footerStr)
+
+	code = prefixImports(code, g.moduleImport("internal/viewmodels"))
+
+	return os.WriteFile(filepath.Join(dir, "modalform.templ"), []byte(code), 0644)
 }
 
 // pickerFooter is the shared modal markup + wiring emitted at the end of a
