@@ -41,7 +41,7 @@ func (g *Generator) generateRouter() error {
 	}
 	code += ")\n\n"
 
-	code += `func NewRouter(db *sql.DB, logLevel string) http.Handler {
+	code += `func NewRouter(db *sql.DB, authDB *sql.DB, logLevel string) http.Handler {
 	r := chi.NewRouter()
 
 	if logLevel == "err" {
@@ -65,8 +65,8 @@ func (g *Generator) generateRouter() error {
 
 	r.Route(panelPath, func(r chi.Router) {
 		r.Use(auth.CSRFMiddleware)
-		r.Get("/login", auth.LoginHandler(db))
-		r.Post("/login", auth.LoginHandler(db))
+		r.Get("/login", auth.LoginHandler(authDB))
+		r.Post("/login", auth.LoginHandler(authDB))
 
 		r.Group(func(r chi.Router) {
 			r.Use(auth.AuthMiddleware)

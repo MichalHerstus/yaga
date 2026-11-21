@@ -10,6 +10,10 @@ Everything under `admin/` is a build artifact. This guide exists so an AI agent
 modifies this project correctly: edit the YAML, regenerate, rebuild — and
 only hand-write the two Go files that yaga deliberately leaves to the user.
 
+The generated app opens **two databases**: `system.db` (SQLite, auth only — created
+and seeded by `generate`) and the business DB (`DATABASE_URL`, from the `schema:`
+block). Auth data is never stored in the business DB. See "Databases & auth" below.
+
 ## THE GOLDEN RULE
 
 **Never hand-edit generated Go code.** The generated files are rewritten on every
@@ -54,6 +58,10 @@ make                                                           # templ + go buil
   `package`, `clean`.
 - Sanity-check a config without building: `./yaga validate --verbose`
   (parses YAML + the schema block; does NOT verify SQL against a live DB).
+- `generate` also creates/refreshes `admin/system.db` (the SQLite **auth** database)
+  and writes `AUTH_DB_DSN=system.db` into `admin/.ENV`. `system.db` is never deleted
+  or replaced, even with `--force`; omitting `--admin-password` leaves existing users
+  untouched, while passing it resets `admin@admin.test`.
 
 ## How the YAML drives the code (the dependency graph)
 
@@ -71,6 +79,33 @@ yaga.yaml ──► resource name ──► Go package / URL segment
       ├── hooks ──► stubs in internal/hooks/hooks.go + inlined db.ExecContext
       └── pages/widgets ──► raw SQL executed at REQUEST time (tables/columns must exist in the schema block + live DB)
 ```
+
+## Databases & auth (split storage)
+
+Auth data lives **only** in the SQLite file `admin/system.db`, created by
+`yaga generate`. The working business DB (from `connections.*.dsn` / `DATABASE_URL`)
+holds business data only — there is no `users`/`roles` table there and none is created
+by `init` or `generate`. This is a hard cut: auth rows already in a business DB are
+NOT migrated. The generated `auth.table` name (default `users`) and login columns
+(`auth.login.fields`, default `email`/`password`) describe tables **inside
+`system.db`**.
+
+- Runtime resolution in generated `main.go`:
+  - business DB: `DATABASE_URL` env → `.ENV` → non-secret localhost default (only when
+    no connection is configured);
+  - auth DB: `AUTH_DB_DSN` env → `.ENV` → `system.db`.
+  - Both connections are opened and sanity-checked (a real business table, then
+    `auth.table` in the SQLite file) **before** the HTTP port is bound, so a missing DB
+    fails fast instead of holding the port.
+- `panel.NewRouter(db, authDB, logLevel)` passes `authDB` only to the login handler;
+  every resource/page handler keeps the business `*sql.DB`. The login query is
+  SQLite-native (`?` placeholders, double-quoted identifiers) regardless of the
+  business driver.
+- **Never hand-edit `system.db`.** To add/reset users, regenerate with
+  `--admin-password`, or use the dashboard. There is no YAML field for its path and no
+  compatibility mode.
+- In the table below, "startup sanity check" refers to the **business** DB; the auth DB
+  always runs `SELECT 1 FROM "<auth.table>" LIMIT 1` via the pure-Go sqlite driver.
 
 ### Naming rules (must match exactly)
 
@@ -98,14 +133,16 @@ new dialect — the generator does not translate hand-written SQL for you.
 |---|---|---|---|
 | YAML `driver:` | `postgres` | `sqlite`/`sqlite3` | `mssql`/`sqlserver` |
 | `sql.Open` driver (main.go) | `pgx` | `sqlite` (via blank-imported `modernc.org/sqlite`) | `mssql` |
+| auth DB (main.go) | always `sqlite` via `AUTH_DB_DSN` → `system.db` | same | same |
 | bind placeholders | `$1..$N` | `?` | `$1..$N` (loose `$N`→`@pN`) |
 | LIKE operator | `ILIKE` | `LIKE` | `LIKE` (case-insensitive collation) |
 | pagination | `LIMIT $1 OFFSET $2` | `LIMIT ? OFFSET ?` | `OFFSET $2 ROWS FETCH NEXT $1 ROWS ONLY` (REQUIRES an ORDER BY) |
 | data-query id type | `int32` | `int64` | `int32` (bigint PK → `id_type: int64`) |
 | create-hook id capture | `RETURNING <id>` | `RETURNING <id>` | `OUTPUT INSERTED.<id>` |
 | stored procedures | `CALL name($1)` | not supported | `EXEC name $1` |
-| startup sanity check | `SELECT 1 FROM {table} LIMIT 1` | same | `SELECT TOP 1 1 FROM {table}` |
-| go.mod extra | `github.com/jackc/pgx/v5` | `github.com/modernc.org/sqlite` | `github.com/microsoft/go-mssqldb` |
+| startup sanity check (business DB) | `SELECT 1 FROM {table} LIMIT 1` | same | `SELECT TOP 1 1 FROM {table}` |
+| auth DB sanity check | `SELECT 1 FROM "<auth.table>" LIMIT 1` (sqlite, both DBs checked before bind) | same | same |
+| go.mod extra | `modernc.org/sqlite` + `github.com/jackc/pgx/v5` | `modernc.org/sqlite` only | `modernc.org/sqlite` + `github.com/microsoft/go-mssqldb` |
 
 #### Postgres rules
 - Inline SQL (`query:`/`sql:`/widgets) uses `$N` placeholders, `ILIKE`, `LIMIT/OFFSET`.
@@ -207,7 +244,8 @@ request time** — no generation-time checks. Verify every table/column you
 reference exists in the `schema:` block of `yaga.yaml` and in the live DB
 (sqlite: `admin/data/admin.db`; postgres/mssql: the configured server). The widget
 SQL must also be in the current driver's dialect (e.g. `strftime` is sqlite-only;
-postgres uses `to_char`/`date_trunc`). `generate` does not re-seed the DB.
+postgres uses `to_char`/`date_trunc`). `generate` does not re-seed the **business** DB
+(it only creates/auth-seeds `system.db`).
 
 ### Schema editing rules
 
@@ -217,7 +255,8 @@ postgres uses `to_char`/`date_trunc`). `generate` does not re-seed the DB.
   `yaga init --db DSN --force` (rewrites the `schema:` block), or hand-edit the
   block carefully — table name, `pk`, columns, and `foreign_keys` must match the
   live DB or generated queries fail at request time.
-- `generate` never touches the live DB and never executes the schema block.
+- `generate` never touches the live **business** DB and never executes the schema block
+  (its only DB write is the local SQLite `system.db` for auth).
 
 ## Workflow checklist (any change)
 
@@ -236,6 +275,6 @@ postgres uses `to_char`/`date_trunc`). `generate` does not re-seed the DB.
 - DO implement `fn:` hook bodies in `admin/internal/hooks/hooks.go`.
 - DON'T touch any other generated Go/templ/JS/config file.
 - DON'T invent table/column names, query names, or URLs that don't exist — verify against the YAML + schema block first.
-- DON'T expect `generate` to update the live DB — apply DDL manually, then re-capture `schema:`.
+- DON'T expect `generate` to update the live business DB — apply DDL manually, then re-capture `schema:`. It only writes the local `system.db` (auth).
 - DON'T mix dialects: keep every inline SQL consistent with the `connections.default.driver`
   in the YAML (placeholders, LIKE/ILIKE, pagination, date functions).

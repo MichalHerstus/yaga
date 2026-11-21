@@ -72,26 +72,29 @@ yaga version
 > **binary** (not the source) to the target — `make package` builds exactly that
 > deployment archive for you.
 
-### 1.4 DSN configuration (how the dashboard finds its database)
+### 1.4 DSN configuration (how the dashboard finds its databases)
 
-The generated dashboard resolves its database DSN at startup, in this order:
+The generated dashboard opens **two** databases: the business database (`DATABASE_URL`)
+and a local SQLite **system database** holding only auth data (`AUTH_DB_DSN`, default
+`system.db`). Both DSNs are resolved at startup, each in this order:
 
-1. **`DATABASE_URL` environment variable** — wins over everything. Ideal for CI/CD and
-   shell-level overrides.
+1. **Environment variable** (`DATABASE_URL` / `AUTH_DB_DSN`) — wins over everything.
+   Ideal for CI/CD and shell-level overrides.
 2. **`.ENV` file** next to the dashboard binary — generated into the project folder by
-   `yaga generate` (mode 0600, owner-readable only), containing `DATABASE_URL=<dsn>`.
-   Edit it to point at a different database (e.g. switching from a test to a production
-   database) without rebuilding.
-3. **Non-secret localhost fallback** — only used when the config declared *no* connection
-   at all (a config that does declare one refuses to start when no DSN is found).
+   `yaga generate` (mode 0600, owner-readable only), containing both
+   `DATABASE_URL=<dsn>` and `AUTH_DB_DSN=system.db`. Edit it to point at different
+   databases (e.g. switching from a test to a production database) without rebuilding.
+3. **Fallback** — for the business DB, a non-secret localhost default when the config
+   declared *no* connection at all; for the auth DB, `system.db` in the working directory.
 
 ```ini
 # generated admin/.ENV  (0600)
-# The DATABASE_URL environment variable overrides this value at runtime.
+# DATABASE_URL / AUTH_DB_DSN environment variables override these values at runtime.
 DATABASE_URL=postgres://user:pass@localhost:5432/mydb?sslmode=disable
+AUTH_DB_DSN=system.db
 ```
 
-Examples for the other drivers:
+Examples for the other business drivers:
 
 ```sh
 DATABASE_URL="file:./data/admin.db" ./admin                    # SQLite (relative path!)
@@ -100,13 +103,18 @@ DATABASE_URL="sqlserver://user:pass@localhost:1433?database=mydb" ./admin   # MS
 
 Notes:
 
-- The DSN is **never** compiled into the dashboard binary — secrets stay out of the
+- The DSNs are **never** compiled into the dashboard binary — secrets stay out of the
   artifact. The source `yaga.yaml` still holds the plaintext `dsn:` under `connections:`
   (it drives generation), so treat `yaga.yaml` as sensitive.
+- `system.db` is created by **`yaga generate`** in the generated app folder. It holds the
+  `roles` table and the users table named by `auth.table` (default `users`; identity and
+  password columns come from `auth.login.fields`). It is never deleted or replaced by
+  regeneration, even with `--force`. Run the binary from the folder containing
+  `system.db` (or point `AUTH_DB_DSN` elsewhere).
 - **`yaga generate` rewrites `.ENV`** from the config on every run. For deployment
-  environments, edit `.ENV` (or set `DATABASE_URL`) *after* generating / packaging —
-  `make package` includes `.ENV` in the release archive.
-- The generated server runs a DB sanity query **before binding the port**, so a
+  environments, edit `.ENV` (or set the env vars) *after* generating / packaging —
+  `make package` includes `.ENV` and `system.db` in the release archive.
+- The generated server sanity-checks **both** databases **before binding the port**, so a
   missing/uninitialised database is a fatal startup error instead of an occupied port.
 
 ---
@@ -129,7 +137,7 @@ yaga version        Print version information
 | `--config` | `-c` | `yaga.yaml` | Path to the YAML config file |
 | `--out` | `-o` | `./admin` | Output directory for generated code |
 | `--db` | `-d` | — | DB connection string for `init` (`postgres://…`, `sqlserver://…`, `mssql://…`, or a sqlite file path) |
-| `--admin-password` | `-p` | random | Initial admin password for `init --db` scaffolding |
+| `--admin-password` | `-p` | random | Bootstrap admin password for `generate` (creates/resets the admin in `system.db`); ignored by `init` |
 | `--force` | `-f` | false | Overwrite existing files |
 | `--verbose` | `-v` | false | Verbose logging |
 | `--skip-plugins` | `-s` | false | Skip loading declared plugins (for `generate`) |
@@ -143,8 +151,11 @@ yaga init --db "postgres://user:pass@localhost:5432/mydb" --update              
 ```
 
 The **only** way to scaffold a project. Connects to the database, introspects its schema,
-creates the `users`/`roles` auth tables and an `admin@…` user when they are missing, and
-writes `yaga.yaml` containing one resource per table plus the captured `schema:` block.
+and writes `yaga.yaml` containing one resource per business table plus the captured
+`schema:` block. It is **read-only** with respect to auth: `users`/`roles` are never
+created or seeded in the working DB (they live in the `system.db` created later by
+`yaga generate`), and foreign keys pointing at auth tables are excluded. The dashboard's
+`pages:` block starts with `widgets: []`. `--admin-password` is ignored by `init`.
 
 **Update mode** (`--update`): Merges newly discovered tables into an existing `yaga.yaml`
 instead of overwriting it. All user customisations (custom column labels, actions,
@@ -226,12 +237,13 @@ yaga init --db "sqlserver://user:pass@localhost:1433?database=mydb"     # MSSQL
 What happens:
 
 1. Connects to the database and introspects tables, columns, primary keys and foreign keys.
-2. Creates the `users`/`roles` auth tables with default roles **and** an admin user when
-   they are missing — login `admin@admin.test` / the generated password printed to the
-   console (or `--admin-password`).
-3. Writes `yaga.yaml`: a resource per table (list/detail/form sections, FK fields with
-   pickers), the `auth:` block, one connection, and — critically — the captured
-   **`schema:` block**, the **sole schema source** for generation.
+2. **Never writes to the working database** — `users`/`roles` are not created or seeded
+   there. Auth data lives exclusively in the `system.db` created later by `yaga generate`;
+   existing auth rows in the business DB are left untouched and NOT migrated.
+3. Writes `yaga.yaml`: a resource per business table (list/detail/form sections, FK
+   fields with pickers; auth tables and FKs targeting them are excluded), the `auth:`
+   block, one connection, and — critically — the captured **`schema:` block**, the
+   **sole schema source** for generation. The dashboard starts with `widgets: []`.
 
 The docs are written to disk; you then customise them before generating.
 
@@ -255,12 +267,23 @@ Typical things you tune after `init --db`:
 ### 3.4 Generate
 
 ```bash
-yaga generate                     # writes ./admin (fully offline — no DB, no sqlc)
+yaga generate                     # writes ./admin + ./admin/system.db (offline — no DB, no sqlc)
+yaga generate --admin-password 'secret'   # seed/reset admin@admin.test explicitly
 ```
 
 The generator derives every query from the captured `schema:` block, emits the dashboard
-source, and vendors the pre-built stylesheet + Chart.js. `--force` refreshes an existing
-output. You can re-run this as often as you like — everything is regenerated from scratch.
+source, and vendors the pre-built stylesheet + Chart.js. It also creates **`system.db`**
+in the output folder — the SQLite database holding only the `roles` table and the auth
+users (table name from `auth.table`, default `users`). The admin user is
+`admin@admin.test`: with `--admin-password` that password is used (seeding a fresh DB or
+resetting an existing admin); without it a random one-time password is generated and
+printed. An existing `system.db` is never deleted or replaced, even with `--force`, and
+re-running without `--admin-password` leaves existing users untouched. `--force` refreshes
+the rest of the output. You can re-run this as often as you like — everything except
+`system.db` is regenerated from scratch.
+
+> **Breaking change:** auth data stored in the business DB by older versions is NOT
+> migrated. Regenerated dashboards always start with a fresh `system.db` and admin.
 
 > The AI path and the `--prompt` flow also round-trip through `yaga generate` after
 > editing.
@@ -374,12 +397,15 @@ references a table/column that is missing here.
 
 ```yaml
 auth:
-  table: users                     # login lookup table
+  table: users                     # users table in the SQLite system.db (NOT the business DB)
   login:
-    fields: [email, password]      # identity + password (bcrypt in DB)
+    fields: [email, password]      # identity + password (bcrypt in system.db)
     redirect: /custom/dashboard    # where to go after login (a registered route)
     rate_limit: { max_attempts: 5, window_seconds: 300 }
 ```
+
+Auth tables are created and seeded by `yaga generate` in `system.db`; the working `--db`
+database is never touched for auth. See Sections 1.4 and 3.4.
 
 ### `navigation` — sidebar
 
@@ -775,20 +801,26 @@ hook error aborts the request with HTTP 500.
 - **Building generated app requires a Go toolchain.** No npm, no sqlc, no Tailwind
   binary — but `go` must be on the machine that runs `make build`. For machines without
   Go, deploy the binary (`make package` bundles binary + static + `.ENV` + migrations).
-- **The DSN is a runtime concern.** It lives in `.ENV` (0600) next to the binary, with
-  `DATABASE_URL` env override, and is never compiled in. `yaga.yaml` still contains the
-  plaintext DSN.
-- **`.ENV` is regenerated by `yaga generate`**; for per-deployment databases set
-  `DATABASE_URL` (env) or edit `.ENV` after generation.
-- **`yaga generate` is fully offline** — it never hits the database and never runs sqlc
-  or a Tailwind binary. Schema comes from the captured `schema:` block.
+- **Two databases.** The business DB (`DATABASE_URL`) holds only business data; auth
+  lives exclusively in the SQLite `system.db` (`AUTH_DB_DSN`, default `system.db`),
+  created by `yaga generate`. `yaga.yaml` holds only the plaintext business DSN. There
+  is no YAML setting for the auth DB path and no compatibility mode.
+- **Both DSNs are runtime concerns.** They live in `.ENV` (0600) next to the binary with
+  `DATABASE_URL` / `AUTH_DB_DSN` env overrides, and are never compiled in.
+- **`.ENV` is regenerated by `yaga generate`** (including `AUTH_DB_DSN=system.db`); for
+  per-deployment databases set the env vars or edit `.ENV` after generation.
+- **`yaga generate` is fully offline** — it never hits the *business* database and never
+  runs sqlc or a Tailwind binary. Schema comes from the captured `schema:` block; it only
+  writes the local `system.db` auth file.
 - **`init --db` is the only scaffold.** Without `--db`, `init` errors; there is no empty
-  template or `--demo`.
+  template or `--demo`. `init` is read-only w.r.t. auth — existing `users`/`roles` in the
+  business DB are left untouched and are NOT migrated.
 - **Default admin login** — `admin@admin.test` / the one-time password printed by
-  `init --db` (or `--admin-password`); roles table defaults to `admin`/`manager`/`user`.
-- **The server pre-checks the DB** before binding the port (sanity `SELECT 1` against the
-  auth table), so a broken/missing DB is a fatal startup error, not a runtime waiting
-  behind an open port.
+  `yaga generate` (or `--admin-password`, which also resets an existing admin). Roles
+  default to `admin`/`manager`/`user`. An existing `system.db` survives `--force`.
+- **The server pre-checks both DBs** before binding the port (sanity `SELECT 1` against a
+  real business table and against `auth.table` in `system.db`), so a broken/missing DB
+  is a fatal startup error, not a runtime waiting behind an open port.
 - **Session secret** — set `SESSION_SECRET` (≥ 32 chars) for persistence; with
   `APP_ENV=production` a missing secret is fatal. Otherwise sessions reset on restart.
 - **`query:`/`count_query:`/`populate_query:`/`params:` (and the legacy `sqlc:` block)**

@@ -99,9 +99,11 @@ Flags:
                  list/card filter block) and rewrite the config
   --dry-run      With validate: show what --fix would apply without writing
   --admin-password, -p PASSWORD
-                 Set the admin password for --db scaffolding: inserts the
-                 admin when the users table is empty, otherwise resets its
-                 password (a random one is generated and printed when omitted)
+                 Set the bootstrap admin password for generate (which creates
+                 the SQLite system.db): seeds the admin when the system DB is
+                 new, otherwise resets its password. A random one-time password
+                 is generated and printed when omitted. Ignored by init, which
+                 no longer creates auth tables in the --db database.
 
 AI-assisted edit (experimental feature only):
   --prompt TEXT  Edit yaga.yaml via AI instead of the TUI
@@ -123,7 +125,7 @@ WEdit (wedit only):
 // Returns: configPath (YAML config file path, default "yaga.yaml"),
 // outDir (output directory, default "./admin"),
 // db (connection string for --db/-d introspection mode, required by init),
-// adminPassword (initial admin password for --db scaffolding, or ""),
+// adminPassword (bootstrap admin password for generate's system.db, or ""),
 // force (overwrite existing files), verbose (enable verbose logging),
 // skipPlugins (skip loading declared plugins),
 // updateMode (merge new tables into existing config instead of overwriting).
@@ -190,6 +192,9 @@ func cmdInit() {
 		os.Exit(1)
 	}
 
+	if adminPassword != "" {
+		fmt.Println("Note: --admin-password applies to `yaga generate`, which creates the SQLite system.db; `init` no longer creates auth tables in --db.")
+	}
 	if err := cmdInitFromDB(configPath, outDir, dbDSN, adminPassword, force, updateMode); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
@@ -264,7 +269,7 @@ func cmdValidate() {
 // build; failure there is reported as a warning instead of being fatal, since
 // the user can re-run it manually.
 func cmdGenerate() {
-	configPath, outDir, _, _, _, verbose, skipPlugins, _ := parseGlobalFlags()
+	configPath, outDir, _, adminPassword, _, verbose, skipPlugins, _ := parseGlobalFlags()
 
 	cfg, err := parser.ParseFile(configPath)
 	if err != nil {
@@ -280,9 +285,14 @@ func cmdGenerate() {
 	gen.ConfigDir = filepath.Dir(configPath)
 	gen.Verbose = verbose
 	gen.SkipPlugins = skipPlugins
+	gen.AdminPassword = adminPassword
+	gen.AdminPasswordSet = adminPassword != ""
 	if err := gen.Generate(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error generating: %v\n", err)
 		os.Exit(1)
+	}
+	for _, line := range gen.BootstrapLines {
+		fmt.Println(line)
 	}
 
 	fmt.Println("Admin panel generated in", outDir)

@@ -62,26 +62,29 @@ build odpovídající vaší platformě (např. `yaga-MacOS`).
 > (ne zdrojové kódy) na cíl — `make package` sestaví přesně takový
 > instalační archiv.
 
-### 1.4 Konfigurace DSN (jak dashboard najde svou databázi)
+### 1.4 Konfigurace DSN (jak dashboard najde své databáze)
 
-Vygenerovaný dashboard řeší DSN své databáze při spuštění v tomto pořadí:
+Vygenerovaný dashboard otevírá **dvě** databáze: obchodní databázi (`DATABASE_URL`) a
+lokální SQLite **systémovou databázi** obsahující pouze autentizační data (`AUTH_DB_DSN`,
+výchozí `system.db`). Oba DSN se řeší při spuštění v tomto pořadí:
 
-1. **Proměnná prostředí `DATABASE_URL`** — má přednost před vším. Ideální pro CI/CD a
-   přepisy na úrovni shellu.
+1. **Proměnná prostředí** (`DATABASE_URL` / `AUTH_DB_DSN`) — má přednost před vším.
+   Ideální pro CI/CD a přepisy na úrovni shellu.
 2. **Soubor `.ENV`** vedle binárního souboru dashboardu — generovaný do složky projektu
    příkazem `yaga generate` (mód 0600, čitelný pouze vlastníkem), obsahující
-   `DATABASE_URL=<dsn>`. Upravte ho pro přesměrování na jinou databázi (např. přepnutí
-   z testovací na produkční databázi) bez překladu.
-3. **Nedůvěryhodný localhost fallback** — použije se pouze tehdy, když konfigurace
-   *nemá* žádné připojení (konfigurace s připojením odmítne spuštění, pokud DSN není nalezena).
+   `DATABASE_URL=<dsn>` i `AUTH_DB_DSN=system.db`. Upravte ho pro přesměrování na jiné
+   databáze (např. přepnutí z testovacích na produkční) bez překladu.
+3. **Fallback** — pro obchodní DB nedůvěryhodný localhost default, pokud konfigurace
+   *nemá* žádné připojení; pro auth DB `system.db` v pracovním adresáři.
 
 ```ini
 # vygenerovaný admin/.ENV  (0600)
-# Proměnná prostředí DATABASE_URL přepíše tuto hodnotu za běhu.
+# Proměnné prostředí DATABASE_URL / AUTH_DB_DSN přepíší tyto hodnoty za běhu.
 DATABASE_URL=postgres://user:pass@localhost:5432/mydb?sslmode=disable
+AUTH_DB_DSN=system.db
 ```
 
-Příklady pro ostatní ovladače:
+Příklady pro ostatní obchodní ovladače:
 
 ```sh
 DATABASE_URL="file:./data/admin.db" ./admin                    # SQLite (relativní cesta!)
@@ -90,14 +93,20 @@ DATABASE_URL="sqlserver://user:pass@localhost:1433?database=mydb" ./admin   # MS
 
 Poznámky:
 
-- DSN je **nikdy** nekompilována do binárního souboru dashboardu — tajemství zůstávají mimo
-  artefakt. Zdrojový `yaga.yaml` stále obsahuje plaintextový `dsn:` v `connections:`
+- DSN jsou **nikdy** nekompilovány do binárního souboru dashboardu — tajemství zůstávají
+  mimo artefakt. Zdrojový `yaga.yaml` stále obsahuje plaintextový `dsn:` v `connections:`
   (řídí generování), proto považujte `yaga.yaml` za citlivý soubor.
-- **`yaga generate` přepisuje `.ENV`** z konfigurace při každém spuštění. Pro prostředí
-  nasazení upravte `.ENV` (nebo nastavte `DATABASE_URL`) *po* generování / balení —
-  `make package` zahrnuje `.ENV` do release archivu.
-- Vygenerovaný server spouští sanity dotaz na DB **před navázáním portu**, takže
-  chybějící/inicializovaná databázie je fatální chyba při spuštění místo obsazeného portu.
+- `system.db` vytváří **`yaga generate`** ve složce vygenerované aplikace. Obsahuje pouze
+  tabulku `roles` a uživatelskou tabulku pojmenovanou podle `auth.table` (výchozí `users`;
+  identita a heslo z `auth.login.fields`). Při regeneraci se nikdy nesmaže ani nenahradí,
+  ani s `--force`. Spusťte binární soubor ze složky obsahující `system.db` (nebo nastavte
+  `AUTH_DB_DSN` jinam).
+- **`yaga generate` přepisuje `.ENV`** z konfigurace při každém spuštění (včetně
+  `AUTH_DB_DSN=system.db`). Pro prostředí nasazení upravte `.ENV` (nebo nastavte proměnné
+  prostředí) *po* generování / balení — `make package` zahrnuje `.ENV` a `system.db` do
+  release archivu.
+- Vygenerovaný server kontroluje **obě** databáze **před navázáním portu**, takže
+  chybějící/inicializovaná databáze je fatální chyba při spuštění místo obsazeného portu.
 
 ---
 
@@ -119,7 +128,7 @@ yaga version        Vypíše informace o verzi
 | `--config` | `-c` | `yaga.yaml` | Cesta k YAML konfiguračnímu souboru |
 | `--out` | `-o` | `./admin` | Výstupní adresář pro generovaný kód |
 | `--db` | `-d` | — | Připojovací řetězec DB pro `init` (`postgres://…`, `sqlserver://…`, `mssql://…` nebo cesta k sqlite souboru) |
-| `--admin-password` | `-p` | náhodné | Počáteční heslo administrátora pro `init --db` scaffolding |
+| `--admin-password` | `-p` | náhodné | Heslo administrátora pro `generate` (vytvoří/resetuje admina v `system.db`); `init` ho ignoruje |
 | `--force` | `-f` | false | Přepsat existující soubory |
 | `--verbose` | `-v` | false | Podrobný logování |
 | `--skip-plugins` | `-s` | false | Přeskočit načítání deklarovaných pluginů (pro `generate`) |
@@ -132,9 +141,12 @@ yaga init --db "postgres://user:pass@localhost:5432/mydb" [--config yaga.yaml] [
 yaga init --db "postgres://user:pass@localhost:5432/mydb" --update               # Sloučit nové tabulky do existující konfigurace
 ```
 
-**Jediný** způsob, jak vytvořit kostru projektu. Připojí se k databázi, introspektuje schéma,
-vytvoří auth tabulky `users`/`roles` s výchozími rolemi **a** uživatele admina, pokud
-chybí, a zapíše `yaga.yaml` obsahující jeden zdroj na tabulku plus zachycený blok `schema:`.
+**Jediný** způsob, jak vytvořit kostru projektu. Připojí se k databázi, introspektuje schéma
+a zapíše `yaga.yaml` obsahující jeden zdroj na obchodní tabulku plus zachycený blok
+`schema:`. K autentizaci je **read-only**: `users`/`roles` se v pracovní DB nevytvářejí ani
+neplní (žijí v `system.db`, kterou později vytvoří `yaga generate`), cizí klíče směřující
+na auth tabulky se vynechávají. Blok `pages:` začíná `widgets: []`. `--admin-password` je
+pro `init` ignorován.
 
 **Režim aktualizace** (`--update`): Sloučí nově objevené tabulky do existujícího `yaga.yaml`
 místo přepisu. Všechna uživatelská přizpůsobení (vlastní popisky sloupců, akce,
@@ -216,12 +228,14 @@ yaga init --db "sqlserver://user:pass@localhost:1433?database=mydb"     # MSSQL
 Co se stane:
 
 1. Připojí se k databázi a introspektuje tabulky, sloupce, primární a cizí klíče.
-2. Vytvoří auth tabulky `users`/`roles` s výchozími rolemi **a** uživatelem admina, pokud
-   chybí — přihlašovací jméno `admin@admin.test` / vygenerované heslo vypsané do
-   konzole (nebo `--admin-password`).
-3. Zapíše `yaga.yaml`: jeden zdroj na tabulku (oddíly list/detail/form, pole FK s
-   pickery), blok `auth:`, jedno připojení a — co je nejdůležitější — zachycený
-   **blok `schema:`**, **jediný zdroj schématu** pro generování.
+2. **Nikdy nezapisuje do pracovní databáze** — `users`/`roles` se zde nevytvářejí ani
+   neplní. Autentizační data žijí výhradně v `system.db`, kterou později vytvoří
+   `yaga generate`; existující auth řádky v obchodní DB zůstávají nedotčeny a NEjsou
+   migrovány.
+3. Zapíše `yaga.yaml`: jeden zdroj na obchodní tabulku (oddíly list/detail/form, pole FK
+   s pickery; auth tabulky a FK na ně jsou vynechány), blok `auth:`, jedno připojení
+   a — co je nejdůležitější — zachycený **blok `schema:`**, **jediný zdroj schématu**
+   pro generování. Dashboard začíná `widgets: []`.
 
 Dokumenty se zapíší na disk; poté je přizpůsobíte před generováním.
 
@@ -245,12 +259,22 @@ Typické věci, které upravíte po `init --db`:
 ### 3.4 Generování
 
 ```bash
-yaga generate                     # zapíše ./admin (plně offline — bez DB, bez sqlc)
+yaga generate                     # zapíše ./admin + ./admin/system.db (offline — bez DB, bez sqlc)
+yaga generate --admin-password 'tajne'   # explicitně vytvoří/resetuje admin@admin.test
 ```
 
 Generátor odvozuje každý dotaz z zachyceného bloku `schema:`, vypíše zdrojový kód
-dashboardu a přidá předem sestavený stylesheet + Chart.js. `--force` obnoví existující
-výstup. Můžete to spouštět znovu a znovu — vše se generuje od začátku.
+dashboardu a přidá předem sestavený stylesheet + Chart.js. Vytvoří také **`system.db`**
+ve výstupní složce — SQLite databázi obsahující pouze tabulku `roles` a uživatele
+(název tabulky z `auth.table`, výchozí `users`). Administrátor je `admin@admin.test`:
+s `--admin-password` se heslo použije (vytvoří nový DB nebo resetuje existujícího admina);
+bez něj se vygeneruje a vypíše náhodné jednorázové heslo. Existující `system.db` se nikdy
+nesmaže ani nenahradí, ani s `--force`, a opětovné spuštění bez `--admin-password`
+nechává existující uživatele nedotčené. `--force` obnovuje zbytek výstupu. Můžete to
+spouštět znovu a znovu — vše kromě `system.db` se generuje od začátku.
+
+> **Průlomová změna:** autentizační data uložená v obchodní DB staršími verzemi se
+> NEmigrují. Nově vygenerované dashboardy vždy začínají čistou `system.db` a administrátorem.
 
 > AI cesta i tok `--prompt` také prochází přes `yaga generate` po
 > úpravě.
@@ -364,12 +388,15 @@ resource odkazuje na tabulku/sloupec, který zde chybí.
 
 ```yaml
 auth:
-  table: users                     # tabulka pro vyhledávání při přihlášení
+  table: users                     # uživatelská tabulka v SQLite system.db (NE v obchodní DB)
   login:
-    fields: [email, password]      # identity + heslo (bcrypt v DB)
+    fields: [email, password]      # identita + heslo (bcrypt v system.db)
     redirect: /custom/dashboard    # kam po přihlášení (zaregistrovaná ruta)
     rate_limit: { max_attempts: 5, window_seconds: 300 }
 ```
+
+Auth tabulky vytváří a plní `yaga generate` v `system.db`; pracovní `--db` databáze se
+autentizace nikdy nedotýká. Viz sekce 1.4 a 3.4.
 
 ### `navigation` — boční panel
 
@@ -765,20 +792,27 @@ hooku přeruší požadavek s HTTP 500.
 - **Sestavení vygenerované aplikace vyžaduje Go toolchain.** Žádný npm, žádný sqlc, žádný
   binární soubor Tailwind — ale `go` musí být na stroji, který spouští `make build`. Pro
   stroje bez Go nasadte binární soubor (`make package` zabalí binární soubor + static + `.ENV` + migrace).
-- **DSN je záležitost běhu.** Žije v `.ENV` (0600) vedle binárního souboru, s
-  přepisem `DATABASE_URL` (env) a nikdy není kompilována dovnitř. `yaga.yaml` stále obsahuje
-  plaintextovou DSN.
-- **`.ENV` je přegenerováno příkazem `yaga generate`**; pro databáze per-nasazení nastavte
-  `DATABASE_URL` (env) nebo upravte `.ENV` po generování.
-- **`yaga generate` je plně offline** — nikdy se nepřipojuje k databázi a nikdy nespouští sqlc
-  ani binární soubor Tailwind. Schéma pochází z zachyceného bloku `schema:`.
+- **Dvě databáze.** Obchodní DB (`DATABASE_URL`) obsahuje pouze obchodní data; autentizace
+  žije výhradně v SQLite `system.db` (`AUTH_DB_DSN`, výchozí `system.db`), kterou vytváří
+  `yaga generate`. `yaga.yaml` obsahuje pouze plaintextovou obchodní DSN. Neexistuje YAML
+  nastavení pro cestu k auth DB ani kompatibilní režim.
+- **Oba DSN jsou záležitostí běhu.** Žijí v `.ENV` (0600) vedle binárního souboru, s
+  přepisy `DATABASE_URL` / `AUTH_DB_DSN` (env) a nikdy nejsou kompilovány dovnitř.
+- **`.ENV` je přegenerováno příkazem `yaga generate`** (včetně `AUTH_DB_DSN=system.db`);
+  pro databáze per-nasazení nastavte proměnné prostředí nebo upravte `.ENV` po generování.
+- **`yaga generate` je plně offline** — nikdy se nepřipojuje k *obchodní* databázi a nikdy
+  nespouští sqlc ani binární soubor Tailwind. Schéma pochází z zachyceného bloku `schema:`;
+  zapisuje pouze lokální soubor `system.db` s autentizačními daty.
 - **`init --db` je jediná kostra.** Bez `--db` init chybuje; neexistuje prázdná
-  šablona ani `--demo`.
+  šablona ani `--demo`. `init` je read-only vůči autentizaci — existující `users`/`roles`
+  v obchodní DB zůstávají nedotčeny a NEjsou migrovány.
 - **Výchozí přihlášení administrátora** — `admin@admin.test` / jednorázové heslo vypsané
-  příkazem `init --db` (nebo `--admin-password`); tabulka rolí má výchozí hodnoty `admin`/`manager`/`user`.
-- **Server předem kontroluje DB** před navázáním portu (sanity `SELECT 1` proti
-  auth tabulce), takže rozbitá/chybějící DB je fatální chyba při spuštění, ne běh
-  za otevřeným portem.
+  příkazem `yaga generate` (nebo `--admin-password`, který také resetuje existujícího
+  admina); tabulka rolí má výchozí hodnoty `admin`/`manager`/`user`. Existující `system.db`
+  přežije i `--force`.
+- **Server předem kontroluje obě DB** před navázáním portu (sanity `SELECT 1` proti
+  skutečné obchodní tabulce a proti `auth.table` v `system.db`), takže rozbitá/chybějící DB
+  je fatální chyba při spuštění, ne běh za otevřeným portem.
 - **Tajemství session** — nastavte `SESSION_SECRET` (≥ 32 znaků) pro perzistenci; s
   `APP_ENV=production` chybějící tajemství je fatální. Jinak se session resetují při restartu.
 - **`query:`/`count_query:`/`populate_query:`/`params:` (a starší blok `sqlc:`)**

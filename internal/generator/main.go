@@ -13,36 +13,33 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/MichalHerstus/yaga/internal/filterexpr"
 	"github.com/MichalHerstus/yaga/internal/types"
 )
 
-// generateMain writes main.go for the generated app: it imports the driver
-// package (pgx stdlib for postgres, modernc.org/sqlite for sqlite, go-mssqldb
-// for mssql), opens the database connection resolved at runtime (see the DSN
-// resolution block), verifies the database is usable (Ping plus a sanity query
-// against the auth table) BEFORE binding the listen port, then serves on a
-// port chosen by the --port flag (or the ADDR env var, default ":8080") with
-// graceful shutdown on SIGINT/SIGTERM. The configured DSN is never baked into
-// the binary — it is emitted into the sibling .ENV file (see generateEnvFile)
-// which deployments can edit. Returns an error if the file cannot be written.
+// generateMain writes main.go for the generated app. The app opens TWO
+// databases: the business DB (DATABASE_URL, driver per config) and the local
+// SQLite system DB holding auth data (AUTH_DB_DSN, default "system.db"). The
+// modernc.org/sqlite driver is therefore always imported; the business driver
+// is added on top unless the business DB is itself sqlite. Both connections
+// are verified (Ping plus a sanity query) BEFORE binding the listen port, so a
+// missing/uninitialized DB never occupies the port. The configured DSNs are
+// never baked into the binary — they live in the sibling .ENV file (see
+// generateEnvFile) and can be overridden by env vars. Returns an error if the
+// file cannot be written.
 func (g *Generator) generateMain() error {
-	driverName := "postgres"
-	driverImport := fmt.Sprintf("_ %q", g.moduleImport("internal/data"))
+	driverName := "pgx"
+	driverImports := `_ "modernc.org/sqlite"`
 	if g.isSQLite() {
 		driverName = "sqlite"
-		driverImport = `_ "modernc.org/sqlite"`
 	} else if g.isMSSQL() {
 		driverName = "mssql"
-		driverImport = `_ "github.com/microsoft/go-mssqldb"`
+		driverImports = "_ \"github.com/microsoft/go-mssqldb\"\n\t" + driverImports
 	} else {
-		driverName = "pgx"
-		driverImport = `_ "github.com/jackc/pgx/v5/stdlib"`
+		driverImports = "_ \"github.com/jackc/pgx/v5/stdlib\"\n\t" + driverImports
 	}
 
-	authTable := g.Config.Auth.Table
-	if authTable == "" {
-		authTable = "users"
-	}
+	authTable, _, _ := g.systemDBInfo()
 
 	poolCode := ""
 	for _, conn := range g.Config.Connections {
@@ -81,18 +78,47 @@ func (g *Generator) generateMain() error {
 `
 	}
 
-	sanityQuery := fmt.Sprintf("SELECT 1 FROM %s LIMIT 1", g.quoteIdent(authTable))
-	if g.isMSSQL() {
-		sanityQuery = fmt.Sprintf("SELECT TOP 1 1 FROM %s", g.quoteIdent(authTable))
+	// Auth DB DSN resolution: explicit env var wins, then .ENV, then the
+	// system.db created next to the generated app by `yaga generate`.
+	authDSNBlock := `
+	authDSN := os.Getenv("AUTH_DB_DSN")
+	if authDSN == "" {
+		authDSN = envFrom(".ENV", "AUTH_DB_DSN")
+	}
+	if authDSN == "" {
+		authDSN = "system.db"
+	}
+`
+
+	// The auth table always lives in SQLite, so quote its identifiers with the
+	// SQLite dialect regardless of the business DB driver.
+	authSanityQuery := fmt.Sprintf("SELECT 1 FROM %s LIMIT 1", filterexpr.QuoteIdent("sqlite", authTable))
+
+	// The business sanity query must target a real business table — users/roles
+	// no longer exist there. Prefer the first resource's table, then the first
+	// schema table; a config with neither only gets a Ping check.
+	businessSanity := ""
+	if table := g.businessSanityTable(); table != "" {
+		q := fmt.Sprintf("SELECT 1 FROM %s LIMIT 1", g.quoteIdent(table))
+		if g.isMSSQL() {
+			q = fmt.Sprintf("SELECT TOP 1 1 FROM %s", g.quoteIdent(table))
+		}
+		businessSanity = fmt.Sprintf(`
+	var one int
+	if err := db.QueryRow(%q).Scan(&one); err != nil && err != sql.ErrNoRows {
+		log.Fatalf("database not initialized: %%v", err)
+	}
+`, q)
 	}
 
 	luaImport := ""
 	luaInit := ""
 	if g.hasAnyScript() {
 		luaImport = fmt.Sprintf("\n\tluascript %q", g.moduleImport("internal/panel/luascript"))
-		if !g.isSQLite() {
-			luaInit = "\n\tluascript.SetKeepQuestion(false)"
-		}
+		// The runtime defaults to SQLite placeholders, but emit the setter on
+		// every driver: with the default (true) on SQLite the import would be
+		// otherwise unused and the generated project would fail to build.
+		luaInit = fmt.Sprintf("\n\tluascript.SetKeepQuestion(%t)", g.isSQLite())
 	}
 
 	code := fmt.Sprintf(`package main
@@ -133,7 +159,7 @@ func main() {
 		os.Exit(0)
 	}
 
-	auth.Init()%s%s
+	auth.Init()%s%s%s
 
 	db, err := sql.Open(%q, dsn)
 	if err != nil {
@@ -144,10 +170,19 @@ func main() {
 	if err := db.Ping(); err != nil {
 		log.Fatal(err)
 	}
-%s
-	var one int
-	if err := db.QueryRow(%q).Scan(&one); err != nil && err != sql.ErrNoRows {
-		log.Fatalf("database not initialized: %%v", err)
+%s%s
+	authDB, err := sql.Open("sqlite", authDSN)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer authDB.Close()
+
+	if err := authDB.Ping(); err != nil {
+		log.Fatal(err)
+	}
+	var authOne int
+	if err := authDB.QueryRow(%q).Scan(&authOne); err != nil && err != sql.ErrNoRows {
+		log.Fatalf("system database not initialized: %%v", err)
 	}
 
 	addr := os.Getenv("ADDR")
@@ -160,7 +195,7 @@ func main() {
 
 	srv := &http.Server{
 		Addr:    addr,
-		Handler: panel.NewRouter(db, *logLevel),
+		Handler: panel.NewRouter(db, authDB, *logLevel),
 	}
 
 	ln, err := net.Listen("tcp", addr)
@@ -215,9 +250,38 @@ func envFrom(path, key string) string {
 	}
 	return ""
 }
-`, driverImport, luaImport, g.moduleImport("internal/panel"), g.moduleImport("internal/panel/auth"), dsnBlock, luaInit, driverName, poolCode, sanityQuery)
+`, driverImports, luaImport, g.moduleImport("internal/panel"), g.moduleImport("internal/panel/auth"), dsnBlock, luaInit, authDSNBlock, driverName, poolCode, businessSanity, authSanityQuery)
 
 	return os.WriteFile(filepath.Join(g.OutDir, "main.go"), []byte(code), 0644)
+}
+
+// businessSanityTable returns a table to probe in the business DB after Ping,
+// so a missing/uninitialized DB fails before the port is bound. Resources come
+// first (their tables are guaranteed by the captured schema); otherwise the
+// first captured schema table is used. Auth tables are excluded — they now
+// live only in the SQLite system DB. Returns "" when there is nothing to probe.
+func (g *Generator) businessSanityTable() string {
+	for _, r := range g.Config.Resources {
+		if name := tableName(r); name != "" && !isAuthTable(name) {
+			return name
+		}
+	}
+	if g.Config.Schema != nil {
+		for _, t := range g.Config.Schema.Tables {
+			if t.Name != "" && !isAuthTable(t.Name) {
+				return t.Name
+			}
+		}
+	}
+	return ""
+}
+
+// isAuthTable reports whether a table belongs to the SQLite system DB rather
+// than the business DB. Kept local to the generator package (the CLI has its
+// own copy used during introspection).
+func isAuthTable(name string) bool {
+	l := strings.ToLower(name)
+	return l == "users" || l == "roles"
 }
 
 // configDSN returns the DSN of the first configured connection, or "" when no
@@ -233,21 +297,23 @@ func configDSN(cfg *types.Config) string {
 }
 
 // generateEnvFile writes the .ENV file into the output directory holding the
-// configured database DSN (DATABASE_URL), mode 0600 so credentials are not
-// world-readable. Deployments can edit this file to point at a different
-// database without rebuilding; the DATABASE_URL environment variable
-// overrides it at runtime. Emitted only when the config declares a connection
-// (a config with zero connections boots from the non-secret localhost default
-// baked into main.go). Returns an error on write failure.
+// configured database DSN (DATABASE_URL) and the auth DB DSN (AUTH_DB_DSN),
+// mode 0600 so credentials are not world-readable. Deployments can edit this
+// file to point at a different database without rebuilding; the corresponding
+// environment variables override the values at runtime. Emitted only when the
+// config declares a connection (a config with zero connections boots from the
+// non-secret localhost default baked into main.go, and the auth DB from its
+// system.db default). Returns an error on write failure.
 func (g *Generator) generateEnvFile() error {
 	dsn := g.sqliteDSNForEnv(configDSN(g.Config))
 	if dsn == "" {
 		return nil
 	}
-	content := "# Generated by YAGA — database connection string read at startup.\n" +
+	content := "# Generated by YAGA — database connection strings read at startup.\n" +
 		"# Edit to switch databases per deployment (test/prod, …) without rebuilding.\n" +
-		"# The DATABASE_URL environment variable overrides this value at runtime.\n" +
-		"DATABASE_URL=" + dsn + "\n"
+		"# DATABASE_URL / AUTH_DB_DSN environment variables override these values.\n" +
+		"DATABASE_URL=" + dsn + "\n" +
+		"AUTH_DB_DSN=" + systemDBFilename + "\n"
 	return os.WriteFile(filepath.Join(g.OutDir, ".ENV"), []byte(content), 0600)
 }
 

@@ -13,6 +13,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/MichalHerstus/yaga/internal/filterexpr"
 )
 
 // generateAuth writes the whole internal/panel/auth package:
@@ -88,7 +90,7 @@ func RBACMiddleware(resource string, action string) func(http.Handler) http.Hand
 			if res.Policies == nil {
 				continue
 			}
-resLower := resourcePkgName(res.Name)
+			resLower := resourcePkgName(res.Name)
 			p := res.Policies
 			if p.ViewAny != "" {
 				rbacMiddleware += fmt.Sprintf(`
@@ -264,7 +266,7 @@ func LoginHandler(db *sql.DB) http.HandlerFunc {
         var hashedPassword string
         var userRole string
         err := db.QueryRowContext(r.Context(),
-            "SELECT id, COALESCE(name, ''), password, COALESCE(role_name, '') FROM %s WHERE %s = $1",
+            "SELECT id, COALESCE(name, ''), %s, COALESCE(role_name, '') FROM %s WHERE %s = ?",
             email,
         ).Scan(&userID, &displayName, &hashedPassword, &userRole)
         if displayName == "" {
@@ -326,7 +328,7 @@ type LoginPageData struct {
 		panelPath, panelName,
 		emailField, passwordField,
 		panelPath, panelName,
-		embedSQL(g.quoteIdent(authTable)), embedSQL(g.quoteIdent(emailField)),
+		embedSQL(filterexpr.QuoteIdent("sqlite", passwordField)), embedSQL(filterexpr.QuoteIdent("sqlite", authTable)), embedSQL(filterexpr.QuoteIdent("sqlite", emailField)),
 		panelPath, panelName,
 		panelPath, panelName,
 		loginReset, successSession,

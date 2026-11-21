@@ -25,9 +25,9 @@ go install github.com/MichalHerstus/yaga/cmd/yaga@latest
 yaga init --db "postgres://user:pass@localhost:5432/mydb?sslmode=disable"
 yaga init --db "./mydata.db"                                          # SQLite
 yaga init --db "sqlserver://user:pass@localhost:1433?database=mydb"   # MSSQL
-#   - creates users/roles tables + a seeded admin user when they are missing
-#     (login admin@admin.test / <printed password>, or --admin-password)
-#   - writes yaga.yaml with a resource per table + the captured schema block
+#   - read-only: never creates/seeds auth tables in the working DB
+#   - writes yaga.yaml with a resource per business table + the captured schema block
+#     (users/roles and FKs targeting them are excluded — auth lives in system.db)
 
 # Edit yaga.yaml — pick one:
 yaga edit                       # interactive TUI editor
@@ -36,7 +36,8 @@ yaga wedit                      # web-based editor at :9090 (embedded SPA, previ
 yaga edit --prompt "…"          # AI-assisted edit via OpenRouter / LM Studio
 
 # Generate the admin panel (offline — no DB, no sqlc)
-yaga generate                   # produces ./admin/
+yaga generate                   # produces ./admin/ + admin/system.db (auth only)
+yaga generate --admin-password 'secret'  # seed/reset admin@admin.test explicitly
 
 # Build and run the generated app
 cd admin
@@ -83,7 +84,9 @@ tar xzf admin-20260804.tar.gz && cd admin-20260804
                                         # short forms: -p 8080 -l err
 ```
 
-Run the binary from the extracted directory — the sqlite DSN (`file:./data/admin.db`) is relative to the working directory. The dashboard resolves its database at startup as `DATABASE_URL` env var → the `.ENV` file next to the binary (generated from the config's `connections.*.dsn`, readable only by the owner) → for a config with no connection, a non-secret localhost default. Edit `.ENV` to point at another database (test→prod) without rebuilding. The generated server runs a DB sanity query **before** binding the port, so a missing/uninitialized DB is a fatal startup error instead of occupying the port, and it shuts down gracefully on SIGINT/SIGTERM.
+Run the binary from the directory containing `system.db` (the generated app folder) — the auth DB path and any relative sqlite business DSN are relative to the working directory. The dashboard opens **two** databases: auth from `AUTH_DB_DSN` env var → `.ENV` → `system.db`, and business data from `DATABASE_URL` env var → `.ENV` (generated from `connections.*.dsn`, readable only by the owner) → a non-secret localhost default when no connection was configured. Edit `.ENV` to point at another database (test→prod) without rebuilding. Both databases are sanity-checked **before** binding the port, so a missing/uninitialized DB is a fatal startup error instead of occupying the port; the server shuts down gracefully on SIGINT/SIGTERM.
+
+> **Breaking change:** auth data is no longer stored in the `--db` database. `yaga generate` creates `system.db` in the generated app folder with `roles` and an admin user (`admin@admin.test` / the password printed by `generate`, or `--admin-password`). Existing `users`/`roles` rows in the business DB are left untouched and are NOT migrated; FKs from business tables to auth tables are no longer supported. Regenerating preserves an existing `system.db` (even with `--force`); pass `--admin-password` explicitly to reset the admin password.
 
 The `init` command fails if files already exist unless `--force` is passed.
 
@@ -99,7 +102,7 @@ The generated dashboard ships with security defaults. Keep them in mind when dep
 - **Security headers** — every response carries CSP, `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy`, and `Permissions-Policy`.
 - **Error responses** — internal errors log server-side and return generic 500/404 text; SQL/table names never leak to clients.
 - **CSV export** — cell values starting with `=`, `+`, `-`, `@`, tab or CR are prefixed with `'` to prevent spreadsheet formula injection.
-- **Admin password** — `init --db` accepts `--admin-password`; when omitted a random one-time password is generated and printed.
+- **Admin password** — `generate` accepts `--admin-password`; when omitted on a fresh system DB a random one-time password is generated and printed. The flag is ignored by `init` (with a note), which no longer creates auth tables in the business DB.
 - **Sort input** — the `order` and `sort` request params are whitelisted against the configured columns.
 
 ## CLI
@@ -124,8 +127,10 @@ Flags:
   --db, -d DSN   Introspect database (postgres://..., sqlserver://... or sqlite file path)
   --force, -f    Overwrite existing files
   --admin-password, -p PASSWORD
-                 Initial admin password for --db scaffolding (random
-                 one-time password generated + printed when omitted)
+                 Bootstrap admin password for generate (system.db): seed on a
+                 fresh DB, reset admin@admin.test when passed explicitly.
+                 Random one-time password generated + printed when omitted.
+                 Ignored by init.
   --verbose, -v  Verbose logging
   --skip-plugins, -s
                  Skip loading declared plugins (generate cannot use them)
@@ -300,9 +305,9 @@ connections:
 ```
 
 - `driver` determines the `sql.Open` driver, the LIKE operator (`ILIKE` on postgres, `LIKE` on sqlite/mssql), bind placeholders (`$N` vs positional `?`), identifier quoting (`"name"` vs `[name]`), and the id type throughout generation (`int32` postgres/mssql, `int64` sqlite unless overridden by `id_type`). If every entry omits `driver`, it defaults to `postgres`.
-- `dsn` is written to a `.ENV` file in the generated project (`DATABASE_URL=<dsn>`, mode 0600) — it is **not** compiled into the binary. At runtime the `DATABASE_URL` environment variable wins over the `.ENV` value; if neither is set and a connection was configured, the server refuses to start. A SQLite example: `file:./data/admin.db`.
-- SQLite uses `modernc.org/sqlite` (pure Go, no CGO — cross-compiles to Windows/Linux/macOS with `CGO_ENABLED=0`); MSSQL requires `github.com/microsoft/go-mssqldb`. The matching driver import is added to the generated `go.mod` automatically.
-- The generated server applies pool settings, then runs a DB sanity query against the auth table **before** binding the port (mssql `SELECT TOP 1 1`, others `SELECT 1 … LIMIT 1`).
+- `dsn` is written to a `.ENV` file in the generated project (`DATABASE_URL=<dsn>` plus `AUTH_DB_DSN=system.db`, mode 0600) — it is **not** compiled into the binary. At runtime the `DATABASE_URL`/`AUTH_DB_DSN` environment variables win over the `.ENV` values; if neither is set and a connection was configured, the server refuses to start. A SQLite example: `file:./data/admin.db`.
+- SQLite uses `modernc.org/sqlite` (pure Go, no CGO — cross-compiles to Windows/Linux/macOS with `CGO_ENABLED=0`). It is **always** a generated dependency because the auth DB is SQLite; MSSQL additionally requires `github.com/microsoft/go-mssqldb`, postgres `github.com/jackc/pgx/v5`. The matching business driver import is added to the generated `go.mod` automatically.
+- The generated server applies pool settings, runs a sanity query against a business table (mssql `SELECT TOP 1 1`, others `SELECT 1 … LIMIT 1`), then opens the SQLite auth DB and sanity-checks `auth.table` there — all **before** binding the port.
 
 ### Schema
 
@@ -340,7 +345,7 @@ MSSQL is a first-class database driver for both `init --db` introspection and ge
 
 ```yaml
 auth:
-  table: users        # DB table holding auth users (login lookup). Default: "users".
+  table: users        # users table in the SQLite system.db (NOT the business DB). Default: "users".
   login:
     fields: [email, password]  # [usernameField, passwordField]; first = identity,
                                #   second = password (bcrypt-hashed in DB).
@@ -351,7 +356,7 @@ auth:
       window_seconds: 300
 ```
 
-The login handler reads the identity field and the password field from the POST form, verifies the password against a bcrypt hash in `auth.table`, sets a `gorilla/sessions` cookie, and redirects to `login.redirect`. Unauthenticated users hitting a protected route are redirected to `<panel.path>/login`. `auth.guard`/`auth.provider` are parsed but not yet used; `registration`/`password_reset`/`remember_me` are config-only flags (parsed, not implemented in the generated app).
+The login handler reads the identity field and the password field from the POST form, verifies the password against a bcrypt hash in `auth.table` **inside `system.db`**, sets a `gorilla/sessions` cookie, and redirects to `login.redirect`. The users/roles tables do not need to exist in the business DB. Unauthenticated users hitting a protected route are redirected to `<panel.path>/login`. `auth.guard`/`auth.provider` are parsed but not yet used; `registration`/`password_reset`/`remember_me` are config-only flags (parsed, not implemented in the generated app).
 
 ### Navigation
 

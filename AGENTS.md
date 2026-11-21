@@ -63,16 +63,32 @@ generation time. The generated app never runs sqlc; `admin/sql/` is not produced
 
 **What it does:**
 1. Connects to the DB, introspects schema via `information_schema` (postgres) or `PRAGMA` (sqlite)
-2. If `users`/`roles` tables are missing, creates them with default roles (admin/manager/user) and inserts an admin user (`admin@admin.test` / `admin`, bcrypt-hashed)
-3. If `users`/`roles` already exist with data, respects them as-is (no admin user inserted)
-4. Generates `yaga.yaml` with a resource per table (excluding `users`/`roles`) — list/detail/form sections, FK relation fields with `options_value`/`options_label`
-5. Emits the introspected schema as the `schema:` block — the sole schema source for the offline generator (no SQL query files, no `schema.sql`; only auth-table DDL when auth tables were created)
+2. **Never writes to the working DB** — auth tables (`users`/`roles`) are no longer created or seeded here; that happens in `yaga generate`'s SQLite system DB (see "Split auth database" below)
+3. Generates `yaga.yaml` with a resource per business table (excluding `users`/`roles` and FKs pointing at them) — list/detail/form sections, FK relation fields with `options_value`/`options_label`
+4. Emits the introspected schema as the `schema:` block — the sole schema source for the offline generator (no SQL query files, no `schema.sql`). The dashboard's `pages:` block starts with `widgets: []` (the old "Total Users" stats queried tables that no longer exist in the business DB)
 
 **Type mapping:** `int`/`serial` → `integer`, `varchar`/`text` → `string`, `bool` → `boolean`, `timestamp`/`date` → `datetime`, `real`/`float`/`numeric` → `float`, `json`/`jsonb` → `json`, `bytea`/`blob` → `file`.
 
 **FK handling:** Foreign keys become `relation` fields in forms with `options_value`/`options_label`; the option query is derived at generate time from the `schema:` FK metadata. In list views, FK columns are replaced with LEFT JOINs showing the foreign table's label column (preferred: `name`, then `title`, then `label`, then first non-PK text column).
 
-**Auth table DDL:** Postgres uses `SERIAL`/`TIMESTAMPTZ`; SQLite uses `INTEGER PRIMARY KEY AUTOINCREMENT`/`datetime('now')`.
+**Auth table DDL:** no longer emitted by `init`; `yaga generate` creates the SQLite system DB (see below). Hard cut: existing `users`/`roles` in the working DB are left untouched and are NOT migrated.
+
+### Split auth database (system.db)
+
+Auth data lives exclusively in a SQLite database created by `yaga generate`, not in the working `--db` database:
+
+```
+generated app/
+├── system.db   ← auth only: roles (admin/manager/user) + auth.table
+└── DATABASE_URL DB  ← all business data, unchanged by generate/init
+```
+
+- `internal/generator/systemdb.go` (`generateSystemDB()`) runs first in `Generate()`, after the initial `ensureDirs()`. It opens `<OutDir>/system.db` with `modernc.org/sqlite`, emits `roles` (with `INSERT OR IGNORE` seeds) and the auth table (`id`, `name`, `auth.login.fields[0]` as unique identity, `auth.login.fields[1]` as password, `role_id`, `role_name`, `status`, `created_at`), then seeds the admin via `internal/authbootstrap.EnsureAdmin`. All system-DB identifiers use `filterexpr.QuoteIdent("sqlite", …)` — never `g.quoteIdent()`, which would follow the business driver and emit `[name]` on MSSQL.
+- **Idempotent**: an existing `system.db` is never deleted or replaced, even with `--force`. Omitting `--admin-password` leaves existing users untouched; passing it explicitly resets the `admin@admin.test` password (or inserts the admin when absent). A random 14-char password is generated and printed when omitted on a fresh DB. `Generator.BootstrapLines` carries the console lines printed by `cmdGenerate`.
+- Runtime DSN resolution in generated `main.go`: `AUTH_DB_DSN` env → `AUTH_DB_DSN` line in `.ENV` (written alongside `DATABASE_URL` when a connection is configured) → `system.db`. There is no YAML setting for the system DB path and no compatibility mode.
+- `main.go` then opens `authDB := sql.Open("sqlite", authDSN)`, Pings it and runs `SELECT 1 FROM <auth.table> LIMIT 1` (SQLite-quoted) before binding the port. `panel.NewRouter(db, authDB, logLevel)` passes the auth DB only to `auth.LoginHandler(authDB)`; every resource/page handler keeps the business `*sql.DB`. The login query uses SQLite-native `?` placeholders and double-quoted identifiers.
+- Generated `go.mod` always pins `modernc.org/sqlite v1.55.0` (the auth DB driver); the business driver (pgx/go-mssqldb) is added on top unless the business DB is itself sqlite. Generated `main.go` blank-imports sqlite unconditionally and dedupes the import when the business DB is sqlite.
+- **Breaking change**: auth data already stored in a business DB is not migrated; FKs from business tables to auth tables are no longer supported (`cmd/yaga/introspect.go` filters them from the captured schema). A regenerated app always gets a fresh system DB with a fresh admin.
 
 Flags: `init --db <dsn> --config <yaml> --out <dir> --force --update` (short variants `-d`, `-c`, `-o`, `-f`).
 
@@ -158,7 +174,7 @@ Driver comes from the first `connections:.*.driver` value (default `"postgres"`)
 | Concern | postgres | sqlite | mssql |
 |---|---|---|---|
 | `sql.Open` driver | `pgx` + `_ "github.com/jackc/pgx/v5/stdlib"` | `sqlite` + `_ "modernc.org/sqlite"` | `mssql` + `_ "github.com/microsoft/go-mssqldb"` |
-| go.mod | adds `github.com/jackc/pgx/v5 v5.10.0` | adds `modernc.org/sqlite v1.55.0` | adds `github.com/microsoft/go-mssqldb v1.10.0` |
+| go.mod | adds `github.com/jackc/pgx/v5 v5.10.0` | adds `modernc.org/sqlite v1.55.0` | adds `github.com/microsoft/go-mssqldb v1.12.0` |
 | CGO | required (libc) — no static cross-builds | **none** (pure Go) — `CGO_ENABLED=0` static builds for linux/windows/macOS | none — `CGO_ENABLED=0` static builds |
 | LIKE operator | `ILIKE` | `LIKE` | `LIKE` (case-insensitive default collation) |
 | bind placeholders | `$N` | `?` (positional, SQL-text order) | `$N` (go-mssqldb loose mode maps `$N`→`@pN`) |
@@ -187,10 +203,10 @@ Every identifier in `listSelectFrom` (`labelJoins`, LEFT JOIN table/column/label
 - **ORDER BY is omitted from generated list/options queries for mssql**: a derived table (the `options_sql` wrapper) cannot have ORDER BY without TOP/OFFSET/FOR XML, and `TOP` cannot combine with `OFFSET` — so mssql list queries get `ORDER BY (SELECT NULL)` as a fallback only when no sort is set.
 - **MSSQL column names are PascalCase** (`CeleJmeno`, `ZamestnanecID`). The naming convention lowercases the whole identifier and only splits on `_`, so yaga's `snakeToPascal` lowercases input first: `CeleJmeno`→`Celejmeno`, `ZamestnanecID`→`Zamestnanecid`, `role_id`→`RoleID` (still). Row maps are keyed by the raw selected column name, so introspection emits `id_column: ID` when the key column isn't literally `id`.
 - **`table:` / `id_type:` / `id_column:` overrides** are emitted by introspection when the convention doesn't match the real schema (e.g. resource `Zamestnanec` → `table: Zamestnanec`; bigint PK → `id_type: int64`; `ID` column → `id_column: ID`). The generator's `tableName()`/`idColumn()`/`idGoTypeForResource()` fall back to the old conventions when the fields are absent.
-- Sanity check in generated main.go for mssql is `SELECT TOP 1 1 FROM {table}` (`TOP 1` replaces `LIMIT 1`).
+- Sanity check in generated main.go for mssql is `SELECT TOP 1 1 FROM {business table}` (`TOP 1` replaces `LIMIT 1`). The auth DB sanity query is always SQLite-native and hits `auth.table` in `system.db`.
 
-### Generated main.go: DB sanity check runs BEFORE binding the port
-`generateMain()` (`main.go`) emits `sql.Open` → `db.Ping()` → **sanity query against `{auth.table}`** (mssql: `SELECT TOP 1 1 FROM …`; others: `SELECT 1 FROM … LIMIT 1`; `sql.ErrNoRows` treated as OK) → only then `net.Listen` + `srv.Serve`. **`connections.*.pool` settings** (`max_open_conns`/`max_idle_conns`/`conn_max_lifetime`) are emitted as `db.SetMaxOpenConns`/`SetMaxIdleConns`/`SetConnMaxLifetime` setters right after `Ping()` and before the sanity query (lifetime parsed via `time.ParseDuration`, silently skipped on error); no setters when the block is absent (tested by `TestGeneratePoolSettings`). Rationale: modernc.org/sqlite silently **creates an empty DB file** when the file is missing, so `db.Ping()` succeeds against a "not found" database and the dashboard would otherwise bind the port and run broken (`no such table`) while holding it — a restart then hits `address already in use`. The sanity query makes a missing/uninitialized DB a fatal startup error **before** the port is bound. The listen port is resolved as `--port` flag (`-p` alias) → `ADDR` env → `:8080` (`flag.Int("port", 0, ...)` + `flag.IntVar(port, "p", 0, ...)`; stdlib `flag` accepts both `--port 9090` and `-port 9090`); the emitted `Makefile` `run` target passes `--port $(PORT)` (`PORT ?= 8080`). Request logging is controlled by `--log` (`-l` alias), values `full` (default, chi's `middleware.Logger`, logs every request) or `err` (only requests that produced an error response, status >= 400) — the flag value is threaded through `NewRouter(db, logLevel)` and selects `middleware.Logger` vs the generated `errorOnlyLogger` (a `middleware.NewWrapResponseWriter` wrapper that `log.Printf`s only when `Status() >= 400`); the `Makefile` `run` target passes `--log $(LOG)` (`LOG ?= full`). `--help`/`-h` prints the command line syntax + flag meanings via `flag.Usage` (custom `flag.PrintDefaults` wrapper) and exits 0 BEFORE any DB or session work. **The generated `auth/session.go` must NOT use a package `init()`** — its `Init()` is called explicitly by `main()` right after the help check (before `sql.Open`), so `-h/--help` runs clean without the `SESSION_SECRET` warning/fail-fast, while production fail-fast still happens before the port binds (`GetSession` also lazily calls `Init()` if `Store` is nil). Generated server also does graceful shutdown on SIGINT/SIGTERM (`signal.NotifyContext` → `srv.Shutdown`) and logs a `is another dashboard instance already running?` hint on bind failure. Keep the bind AFTER the DB checks — ordering is what prevents a broken DB from occupying the port. **Relative sqlite DSNs are absolutized into `.ENV`:** `generateEnvFile` resolves a relative sqlite file DSN (plain path or `file:` URI, query string preserved) against `ConfigDir` via `g.sqliteDSNForEnv`, because the `dsn:` in `yaga.yaml` is authored relative to the config folder while the dashboard runs with the output dir (e.g. `admin/`) as its CWD — a verbatim relative path would resolve to the wrong place and produce `unable to open database file (14)`. Postgres/mssql URLs, `:memory:`, `mode=memory` URIs and already-absolute paths pass through unchanged (tested by `TestGenerateEnvFileSQLiteRelative`).
+### Generated main.go: two DBs, sanity checks run BEFORE binding the port
+`generateMain()` (`main.go`) resolves `DATABASE_URL` (business DB) and `AUTH_DB_DSN` (env → `.ENV` → `system.db`), then emits `sql.Open` → `db.Ping()` → **sanity query against a real business table** (first resource `table:`, else first captured schema table; mssql: `SELECT TOP 1 1 FROM …`; others: `SELECT 1 FROM … LIMIT 1`; `sql.ErrNoRows` treated as OK) → `sql.Open("sqlite", authDB)` → `authDB.Ping()` → **sanity query against `auth.table` in the system DB** (always SQLite-quoted, `?`-free) → only then `net.Listen` + `srv.Serve`. Business auth tables are never probed. **`connections.*.pool` settings** (`max_open_conns`/`max_idle_conns`/`conn_max_lifetime`) are emitted as `db.SetMaxOpenConns`/`SetMaxIdleConns`/`SetConnMaxLifetime` setters right after `Ping()` and before the sanity query (lifetime parsed via `time.ParseDuration`, silently skipped on error); no setters when the block is absent (tested by `TestGeneratePoolSettings`). Rationale: modernc.org/sqlite silently **creates an empty DB file** when the file is missing, so `db.Ping()` succeeds against a "not found" database and the dashboard would otherwise bind the port and run broken (`no such table`) while holding it — a restart then hits `address already in use`. The sanity query makes a missing/uninitialized DB a fatal startup error **before** the port is bound. The listen port is resolved as `--port` flag (`-p` alias) → `ADDR` env → `:8080` (`flag.Int("port", 0, ...)` + `flag.IntVar(port, "p", 0, ...)`; stdlib `flag` accepts both `--port 9090` and `-port 9090`); the emitted `Makefile` `run` target passes `--port $(PORT)` (`PORT ?= 8080`). Request logging is controlled by `--log` (`-l` alias), values `full` (default, chi's `middleware.Logger`, logs every request) or `err` (only requests that produced an error response, status >= 400) — the flag value is threaded through `NewRouter(db, authDB, logLevel)` and selects `middleware.Logger` vs the generated `errorOnlyLogger` (a `middleware.NewWrapResponseWriter` wrapper that `log.Printf`s only when `Status() >= 400`); the `Makefile` `run` target passes `--log $(LOG)` (`LOG ?= full`). `--help`/`-h` prints the command line syntax + flag meanings via `flag.Usage` (custom `flag.PrintDefaults` wrapper) and exits 0 BEFORE any DB or session work. **The generated `auth/session.go` must NOT use a package `init()`** — its `Init()` is called explicitly by `main()` right after the help check (before `sql.Open`), so `-h/--help` runs clean without the `SESSION_SECRET` warning/fail-fast, while production fail-fast still happens before the port binds (`GetSession` also lazily calls `Init()` if `Store` is nil). Generated server also does graceful shutdown on SIGINT/SIGTERM (`signal.NotifyContext` → `srv.Shutdown`) and logs a `is another dashboard instance already running?` hint on bind failure. Keep the bind AFTER the DB checks — ordering is what prevents a broken DB from occupying the port. **Relative sqlite DSNs are absolutized into `.ENV`:** `generateEnvFile` resolves a relative sqlite file DSN (plain path or `file:` URI, query string preserved) against `ConfigDir` via `g.sqliteDSNForEnv`, because the `dsn:` in `yaga.yaml` is authored relative to the config folder while the dashboard runs with the output dir (e.g. `admin/`) as its CWD — a verbatim relative path would resolve to the wrong place and produce `unable to open database file (14)`. Postgres/mssql URLs, `:memory:`, `mode=memory` URIs and already-absolute paths pass through unchanged (tested by `TestGenerateEnvFileSQLiteRelative`).
 
 ### sqlite list handler arg order (critical)
 modernc binds `?` args positionally in SQL-text order, so sqlite branch appends **search args first, then `LIMIT ? OFFSET ?`**, and uses `LIKE`. The postgres branch appends `perPage, offset` first with `ILIKE $N` + `LIMIT $1 OFFSET $2`. Mixing these up silently returns wrong rows on sqlite.
@@ -410,7 +426,7 @@ When any form field has type `file` or `image`:
 
 ## Auth & RBAC
 
-- Login: GET renders `LoginPage` templ, POST verifies bcrypt vs `auth.table`, sets `gorilla/sessions` cookie.
+- Login: GET renders `LoginPage` templ, POST verifies bcrypt against `auth.table` in the **SQLite system DB** (`authDB`, SQLite `?` placeholders), sets `gorilla/sessions` cookie. Resource/page handlers use the business DB.
 - Logout: clears session, redirects to `panel.path`.
 - Middleware: `AuthMiddleware` reads `session.Values["user_id"]`, stores `user_id` + `role` in context.
 - RBAC middleware generated **conditionally**: `r.With(auth.RBACMiddleware(resource, action)).Get/Post(...)` when resource has `policies:` in YAML. Action routes **never** use RBAC (plain `r.Post`).
@@ -560,10 +576,13 @@ The generated app ships security defaults. Keep them intact when editing the emi
   `generator.go` after `generateAuth`) provides `Internal(w, err)` / `NotFound(w, err)`
   that log server-side and return generic status text. Every resource handler and
   page handler imports `httperr` and MUST NOT emit `http.Error(w, err.Error(), ...)`.
-- **Admin password**: `init --db` accepts `--admin-password`
-  (threaded through `parseGlobalFlags`); when omitted, `randomPassword()`
-  (introspect.go) generates a 14-char one-time password that is printed, not
-  stored. `insertAdminUser` now returns `(bool, error)` (inserted or not).
+- **Admin password**: `generate` accepts `--admin-password` (the shared
+  `parseGlobalFlags` flag, also accepted by `init` where it is now a no-op with
+  a printed note). `internal/authbootstrap` seeds the system DB: when omitted
+  on a fresh system DB, `RandomPassword()` generates a 14-char one-time
+  password that is printed, not stored; when passed explicitly on an existing
+  system DB it resets the `admin@admin.test` password. The old
+  `init --db`-creates-auth-tables behaviour is gone.
 - **Security headers**: `securityHeaders` middleware (router.go) is registered on
   every generated router and sets CSP (inline scripts/styles allowed for theme
   toggle + picker), `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`,
@@ -642,6 +661,6 @@ Chart.js is **vendored at generation time** (D8) — no npm, no CDN, runtime is 
 
 ## Generated app dependencies
 
-`github.com/a-h/templ`, `github.com/go-chi/chi/v5`, `github.com/gorilla/sessions`, `golang.org/x/crypto`. Plus `github.com/jackc/pgx/v5` (postgres, blank-imported in main.go), `modernc.org/sqlite v1.55.0` (sqlite, blank-imported in main.go — pure Go, no CGO, so sqlite dashboards cross-compile for Windows/Linux/macOS with `CGO_ENABLED=0`), and `github.com/microsoft/go-mssqldb v1.10.0` (mssql, blank-imported in main.go) — the `pgx` stdlib driver registers the `"pgx"` database/sql name, so generated main.go calls `sql.Open("pgx", dsn)` for postgres; sqlite uses `sql.Open("sqlite", dsn)`.
+`github.com/a-h/templ`, `github.com/go-chi/chi/v5`, `github.com/gorilla/sessions`, `golang.org/x/crypto`. Plus `modernc.org/sqlite v1.55.0` (**always**, for the auth system DB — pure Go, no CGO, so generated dashboards cross-compile for Windows/Linux/macOS with `CGO_ENABLED=0`) and, depending on the business driver, `github.com/jackc/pgx/v5` (postgres, blank-imported in main.go as `"pgx"`), `github.com/microsoft/go-mssqldb v1.12.0` (mssql, blank-imported as `"mssql"`), or nothing extra when the business DB is itself sqlite. Generated main.go calls `sql.Open("sqlite", authDSN)` for the system DB and `sql.Open(<business driver>, dsn)` for business data.
 
 The generated `go.mod` also declares `tool github.com/a-h/templ/cmd/templ` so `go tool templ generate` works without a manual templ install, and `generateMakefile()` emits a `Makefile` whose `build` target runs all steps (Tailwind via the standalone binary, tidy, templ, `go build -o <binary> .`) with no npm dependency.

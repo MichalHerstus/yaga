@@ -3,22 +3,22 @@
 // Implements `yaga init --db {dsn}`: connects to an existing database,
 // introspects its schema (tables, columns, primary keys, foreign keys),
 // generates yaga.yaml — including the captured `schema:` block, the sole
-// source of schema truth for the generator (D11, no sqlc). Creates the
-// users/roles auth tables + admin user when missing.
+// source of schema truth for the generator (D11, no sqlc). Read-only w.r.t.
+// auth: users/roles are never created or seeded here — they live in the
+// SQLite system.db created later by `yaga generate`.
 package main
 
 import (
-	"crypto/rand"
 	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/MichalHerstus/yaga/internal/authbootstrap"
 	"github.com/MichalHerstus/yaga/internal/types"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	_ "github.com/microsoft/go-mssqldb"
-	"golang.org/x/crypto/bcrypt"
 	"gopkg.in/yaml.v3"
 	_ "modernc.org/sqlite"
 )
@@ -758,131 +758,71 @@ func ensureAuthTables(db *sql.DB, driver string, tables []TableInfo) error {
 	return nil
 }
 
-// ensureAdminUser guarantees an admin login (admin@admin.test) exists.
-// When the users table is empty it inserts the admin with the given password.
-// When it already holds rows and reset is true (i.e. the caller passed an
-// explicit --admin-password) it updates that account's password instead of
-// silently ignoring the flag — the previous behaviour left operators who
-// re-ran init with --admin-password unable to log in. With reset false an
-// existing user set is left untouched. If no admin@admin.test row is found on
-// the reset path a new one is inserted.
-// Returns inserted (a new admin row was created), updated (an existing admin
-// row's password was changed) and any error.
+// The admin bootstrap helpers now live in internal/authbootstrap, shared with
+// the generator's system DB creation. These thin wrappers keep the existing
+// CLI tests exercising the same implementation.
 func ensureAdminUser(db *sql.DB, driver, password string, reset bool) (inserted, updated bool, err error) {
-	var count int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM users`).Scan(&count); err != nil {
-		return false, false, fmt.Errorf("counting users: %w", err)
-	}
-	if count > 0 && !reset {
-		return false, false, nil
-	}
-
-	hash, err := bcryptHash(password)
-	if err != nil {
-		return false, false, fmt.Errorf("hashing admin password: %w", err)
-	}
-
-	if count > 0 {
-		var res sql.Result
-		if driver == "postgres" {
-			res, err = db.Exec(`UPDATE users SET password = $1 WHERE email = $2`, hash, "admin@admin.test")
-		} else {
-			res, err = db.Exec(`UPDATE users SET password = ? WHERE email = ?`, hash, "admin@admin.test")
-		}
-		if err != nil {
-			return false, false, fmt.Errorf("updating admin password: %w", err)
-		}
-		if n, _ := res.RowsAffected(); n > 0 {
-			return false, true, nil
-		}
-		// No admin@admin.test row: fall through and insert one.
-	}
-
-	var adminRoleID int
-	if err := db.QueryRow(`SELECT id FROM roles WHERE name = 'admin'`).Scan(&adminRoleID); err != nil {
-		return false, false, fmt.Errorf("finding admin role: %w", err)
-	}
-
-	if driver == "postgres" {
-		_, err = db.Exec(`
-			INSERT INTO users (name, email, password, role_id, role_name, status)
-			VALUES ($1, $2, $3, $4, $5, $6)`,
-			"Admin User", "admin@admin.test", hash, adminRoleID, "admin", "active")
-	} else {
-		_, err = db.Exec(`
-			INSERT INTO users (name, email, password, role_id, role_name, status)
-			VALUES (?, ?, ?, ?, ?, ?)`,
-			"Admin User", "admin@admin.test", hash, adminRoleID, "admin", "active")
-	}
-	if err != nil {
-		return false, false, fmt.Errorf("inserting admin user: %w", err)
-	}
-	return true, false, nil
+	return authbootstrap.EnsureAdmin(db, driver, "users", "email", "password", password, reset)
 }
 
-// adminBootstrapMessage returns the console lines to print after the auth
-// tables are ensured and the admin user is (maybe) inserted or updated. The
-// admin credentials are printed whenever a row was inserted or its password
-// changed — not only when the tables were freshly created — because the
-// password is either the one-time random value generated here or the explicit
-// --admin-password, and neither is stored in plaintext. A database that
-// already ships with seeded roles and an empty users table (e.g. a demo
-// database) previously inserted the admin silently, leaving the operator with
-// no way to learn the generated password.
-// Params: createdTables (whether users/roles were created this run), inserted
-// (whether an admin row was inserted), updated (whether an existing admin
-// row's password was changed), password (the effective admin password).
-// Returns: the lines to print (empty when nothing was done).
 func adminBootstrapMessage(createdTables, inserted, updated bool, password string) []string {
-	var lines []string
-	if createdTables {
-		lines = append(lines, "Created auth tables (users, roles).")
-	}
-	if inserted {
-		lines = append(lines, "Seeded admin user.")
-	}
-	if updated {
-		lines = append(lines, "Updated admin password.")
-	}
-	if inserted || updated {
-		lines = append(lines, fmt.Sprintf("Admin login: admin@admin.test / %s", password))
-	}
-	return lines
+	return authbootstrap.Message(createdTables, inserted, updated, password)
 }
 
-// bcryptHash produces a bcrypt hash of the given plaintext password.
 func bcryptHash(password string) (string, error) {
-	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
-	if err != nil {
-		return "", err
-	}
-	return string(hash), nil
+	return authbootstrap.Hash(password)
 }
 
-// randomPassword returns a cryptographically random 14-character password built
-// from an unambiguous alphabet (no 0/O, 1/l/I). It is used as the one-time
-// admin password for --demo and --db scaffolding when --admin-password is not
-// given, and is printed to the user instead of being embedded anywhere.
 func randomPassword() string {
-	const chars = "abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789"
-	buf := make([]byte, 14)
-	if _, err := rand.Read(buf); err != nil {
-		return "changeme"
+	return authbootstrap.RandomPassword()
+}
+
+// isAuthTableName reports whether a table is part of the auth data, which now
+// lives exclusively in the generated SQLite system DB. The business DB's
+// schema block must not reference it.
+func isAuthTableName(name string) bool {
+	return strings.EqualFold(name, "users") || strings.EqualFold(name, "roles")
+}
+
+// businessTables strips auth tables and any FK pointing at them from an
+// introspected schema. System-DB tables are not reachable from generated
+// business SQL (no cross-database joins), so leaving those FKs in the captured
+// schema would emit broken option queries and label joins.
+func businessTables(tables []TableInfo) []TableInfo {
+	out := make([]TableInfo, 0, len(tables))
+	for _, ti := range tables {
+		if isAuthTableName(ti.Name) {
+			continue
+		}
+		ti.ForeignKeys = filterSlice(ti.ForeignKeys, func(fk ForeignKeyInfo) bool {
+			return !isAuthTableName(fk.ForeignTable)
+		})
+		out = append(out, ti)
 	}
-	for i, c := range buf {
-		buf[i] = chars[int(c)%len(chars)]
+	return out
+}
+
+// filterSlice returns the elements of in for which keep reports true.
+func filterSlice[T any](in []T, keep func(T) bool) []T {
+	out := make([]T, 0, len(in))
+	for _, item := range in {
+		if keep(item) {
+			out = append(out, item)
+		}
 	}
-	return string(buf)
+	return out
 }
 
 // convertSchema converts the introspected []TableInfo into the *types.Schema
 // captured as the `schema:` block of yaga.yaml. Each column's yaga field type
 // is derived via mapDBTypeToFieldType; each foreign key records the label
 // column of its target table (used to build option SQL and list/detail label
-// joins offline).
+// joins offline). Auth tables and FKs targeting them are excluded: they live
+// in the separate SQLite system DB.
 // Params: tables (introspected tables/views), driver (postgres/sqlite/mssql).
 // Returns: the schema block value.
-func convertSchema(tables []TableInfo, driver string) *types.Schema {
+func convertSchema(allTables []TableInfo, driver string) *types.Schema {
+	tables := businessTables(allTables)
 	s := &types.Schema{}
 	for _, ti := range tables {
 		st := types.SchemaTable{
@@ -931,7 +871,8 @@ func writeSchemaBlock(b *strings.Builder, tables []TableInfo, driver string) {
 // list, detail and form sections, plus the captured `schema:` block (the sole
 // schema source for the generator). Foreign keys become relation fields;
 // their option SQL is derived from the schema block at generation time.
-func generateYAML(tables []TableInfo, driver, dsn string) string {
+func generateYAML(allTables []TableInfo, driver, dsn string) string {
+	tables := businessTables(allTables)
 	var b strings.Builder
 
 	b.WriteString(`version: "1.0"
@@ -964,29 +905,17 @@ resources:
 `)
 
 	for _, ti := range tables {
-		if ti.Name == "users" || ti.Name == "roles" {
-			continue
-		}
 		writeResourceYAML(&b, ti, tables, driver)
 	}
 
+	// Auth data is no longer in the working DB, so the previous "Total Users"
+	// stats would query tables that are not there. Emit an empty dashboard.
 	b.WriteString(`
 pages:
   - name: Dashboard
     path: /dashboard
     default: true
-    widgets:
-      - type: stats_grid
-        columns: 2
-        widgets:
-          - type: stat
-            label: "Total Users"
-            query: SELECT COUNT(*) FROM users
-            icon: users
-          - type: stat
-            label: "Active Users"
-            query: SELECT COUNT(*) FROM users WHERE status = 'active'
-            icon: check
+    widgets: []
 
 navigation:
   - group: "Management"
@@ -996,9 +925,6 @@ navigation:
 `)
 
 	for _, ti := range tables {
-		if ti.Name == "users" || ti.Name == "roles" {
-			continue
-		}
 		resourceName := toSingularPascal(ti.Name)
 		b.WriteString(fmt.Sprintf("      - resource: %s\n", resourceName))
 	}
@@ -1243,11 +1169,12 @@ func pkGoType(ti TableInfo, driver string) string {
 }
 
 // cmdInitFromDB is the main entry point for `yaga init --db {dsn}`. It
-// connects to the database, introspects the schema, creates auth tables if
-// missing, inserts an admin user when the users table is empty, then generates
-// yaga.yaml — including the captured `schema:` block. No SQL files are
-// written: the generator runs offline from the schema block (D11).
-// If updateMode is true, merges new tables into existing config instead of overwriting.
+// connects to the database, introspects the schema, then generates yaga.yaml —
+// including the captured `schema:` block. It never writes to the working DB:
+// auth tables are no longer created or seeded here (they live in the SQLite
+// system.db created by `yaga generate`). No SQL files are written: the generator
+// runs offline from the schema block (D11). If updateMode is true, merges new
+// tables into existing config instead of overwriting.
 func cmdInitFromDB(configPath, outDir, dsn, adminPassword string, force, updateMode bool) error {
 	if !force && !updateMode {
 		if _, err := os.Stat(configPath); err == nil {
@@ -1279,32 +1206,9 @@ func cmdInitFromDB(configPath, outDir, dsn, adminPassword string, force, updateM
 		fmt.Println("No tables found in database.")
 	}
 
-	hasRoles := hasTable(tables, "roles")
-	hasUsers := hasTable(tables, "users")
-
-	if err := ensureAuthTables(db, driver, tables); err != nil {
-		return fmt.Errorf("ensuring auth tables: %w", err)
-	}
-
-	adminPass := adminPassword
-	if adminPass == "" {
-		adminPass = randomPassword()
-	}
-	inserted, updated, err := ensureAdminUser(db, driver, adminPass, adminPassword != "")
-	if err != nil {
-		return fmt.Errorf("ensuring admin user: %w", err)
-	}
-
-	for _, line := range adminBootstrapMessage(!hasRoles || !hasUsers, inserted, updated, adminPass) {
-		fmt.Println(line)
-	}
-
-	// Re-introspect after creating auth tables so the full schema is available
-	// for YAML/SQL generation (needed for FK references to roles, etc.)
-	tables, err = introspectSchema(db, driver)
-	if err != nil {
-		return fmt.Errorf("re-introspecting schema: %w", err)
-	}
+	// Auth data now lives in the SQLite system DB created by `yaga generate`;
+	// init is a read-only introspection of the working DB and never creates or
+	// seeds users/roles there.
 
 	if updateMode {
 		return cmdInitUpdate(configPath, dsn, driver, tables)

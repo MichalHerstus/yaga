@@ -1002,7 +1002,9 @@ func TestGeneratePostgresDriver(t *testing.T) {
 	mainStr := string(main)
 	for _, want := range []string{
 		`_ "github.com/jackc/pgx/v5/stdlib"`,
+		`_ "modernc.org/sqlite"`,
 		`sql.Open("pgx", dsn)`,
+		`sql.Open("sqlite", authDSN)`,
 		`dsn = envFrom(".ENV", "DATABASE_URL")`,
 	} {
 		if !strings.Contains(mainStr, want) {
@@ -1025,6 +1027,9 @@ func TestGeneratePostgresDriver(t *testing.T) {
 	}
 	if !strings.Contains(string(gomod), "github.com/jackc/pgx/v5 v5.10.0") {
 		t.Error("go.mod must pin github.com/jackc/pgx/v5 for the postgres driver")
+	}
+	if !strings.Contains(string(gomod), "modernc.org/sqlite v1.55.0") {
+		t.Error("go.mod must always pin modernc.org/sqlite for the system DB")
 	}
 }
 
@@ -1049,6 +1054,9 @@ func TestGenerateEnvFile(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "DATABASE_URL=postgres://user:pass@host:5432/db") {
 		t.Errorf(".ENV must carry DATABASE_URL:\n%s", data)
+	}
+	if !strings.Contains(string(data), "AUTH_DB_DSN=system.db") {
+		t.Errorf(".ENV must carry AUTH_DB_DSN:\n%s", data)
 	}
 	info, err := os.Stat(filepath.Join(dir, ".ENV"))
 	if err != nil {
@@ -2101,6 +2109,45 @@ func TestGenerateIDColumnUpdateDelete(t *testing.T) {
 	}
 	if strings.Contains(delStr, `WHERE id = $1`) {
 		t.Error("delete.go must not hardcode WHERE id")
+	}
+}
+
+// TestGenerateMSSQLDriver ensures an mssql project blank-imports the official
+// Microsoft driver, opens the "mssql" driver name (whose loose $N parsing the
+// emitted SQL relies on), and pins the driver in go.mod.
+func TestGenerateMSSQLDriver(t *testing.T) {
+	dir := t.TempDir()
+	g := New(idColumnConfig(), dir)
+	if err := g.Generate(); err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	assertGeneratedGoParses(t, dir)
+
+	mainB, err := os.ReadFile(filepath.Join(dir, "main.go"))
+	if err != nil {
+		t.Fatalf("read main.go: %v", err)
+	}
+	mainStr := string(mainB)
+	if !strings.Contains(mainStr, `_ "github.com/microsoft/go-mssqldb"`) {
+		t.Errorf("main.go must blank-import github.com/microsoft/go-mssqldb\n--- generated:\n%s", mainStr)
+	}
+	if !strings.Contains(mainStr, `_ "modernc.org/sqlite"`) {
+		t.Errorf("main.go must always blank-import modernc.org/sqlite for the system DB\n--- generated:\n%s", mainStr)
+	}
+	if !strings.Contains(mainStr, `sql.Open("mssql", dsn)`) {
+		t.Errorf("main.go must open the \"mssql\" driver name\n--- generated:\n%s", mainStr)
+	}
+
+	gomod, err := os.ReadFile(filepath.Join(dir, "go.mod"))
+	if err != nil {
+		t.Fatalf("read go.mod: %v", err)
+	}
+	gomodStr := string(gomod)
+	if !strings.Contains(gomodStr, "github.com/microsoft/go-mssqldb v1.12.0") {
+		t.Errorf("go.mod must pin github.com/microsoft/go-mssqldb v1.12.0\n--- generated:\n%s", gomodStr)
+	}
+	if !strings.Contains(gomodStr, "modernc.org/sqlite v1.55.0") {
+		t.Errorf("go.mod must always pin modernc.org/sqlite for the system DB\n--- generated:\n%s", gomodStr)
 	}
 }
 

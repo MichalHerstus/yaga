@@ -850,6 +850,48 @@ resources: []
 	}
 }
 
+// TestGenerateYAMLExcludesSystemAuthTables verifies `init --db` no longer
+// captures users/roles in the business schema, strips FKs targeting them, and
+// emits no user-count widgets: auth data lives exclusively in the SQLite
+// system DB created by `yaga generate`.
+func TestGenerateYAMLExcludesSystemAuthTables(t *testing.T) {
+	tables := []TableInfo{
+		{Name: "users", Columns: []ColumnInfo{{Name: "id", IsPrimaryKey: true}, {Name: "email"}}},
+		{Name: "roles", Columns: []ColumnInfo{{Name: "id", IsPrimaryKey: true}, {Name: "name"}}},
+		{
+			Name:    "orders",
+			Columns: []ColumnInfo{{Name: "id", IsPrimaryKey: true}, {Name: "user_id"}},
+			ForeignKeys: []ForeignKeyInfo{
+				{Column: "user_id", ForeignTable: "users", ForeignColumn: "id"},
+			},
+		},
+	}
+
+	schema := convertSchema(tables, "postgres")
+	if len(schema.Tables) != 1 || schema.Tables[0].Name != "orders" {
+		t.Fatalf("auth tables must be excluded from the schema: %+v", schema.Tables)
+	}
+	if fks := schema.Tables[0].ForeignKeys; len(fks) != 0 {
+		t.Fatalf("FKs targeting the system DB must be stripped: %+v", fks)
+	}
+
+	out := generateYAML(tables, "postgres", "postgres://x/x")
+	for _, unwanted := range []string{
+		"  - name: users", "  - name: roles", "  - name: User", "  - name: Role",
+		"foreign_table: users", "Total Users", "Active Users", "FROM users",
+	} {
+		if strings.Contains(out, unwanted) {
+			t.Errorf("generated YAML must not contain %q:\n%s", unwanted, out)
+		}
+	}
+	if !strings.Contains(out, "widgets: []") {
+		t.Errorf("dashboard should start with no widgets:\n%s", out)
+	}
+	if !strings.Contains(out, "  - name: Order") {
+		t.Errorf("business resource missing:\n%s", out)
+	}
+}
+
 // TestAdminBootstrapMessage verifies the admin credentials are surfaced
 // whenever an admin row is inserted — including the case where the auth tables
 // already existed (e.g. a demo database that ships seeded roles) but the users

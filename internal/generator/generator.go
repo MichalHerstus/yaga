@@ -29,6 +29,14 @@ type Generator struct {
 	SkipPlugins bool
 	// Verbose enables per-plugin load summaries.
 	Verbose bool
+	// AdminPassword seeds the SQLite system DB's bootstrap admin. Empty means
+	// generate a random one-time password and print it.
+	AdminPassword string
+	// AdminPasswordSet records an explicit --admin-password: with an existing
+	// system DB this resets the bootstrap admin's password.
+	AdminPasswordSet bool
+	// BootstrapLines holds console output produced by system DB creation.
+	BootstrapLines []string
 	// pluginFnNames tracks fn hook names whose implementation is provided by a
 	// plugin hook source, so generateHooks skips stub generation for them.
 	pluginFnNames map[string]bool
@@ -195,6 +203,12 @@ func (g *Generator) Generate() error {
 	if err := g.ensureDirs(); err != nil {
 		return fmt.Errorf("creating directories: %w", err)
 	}
+
+	lines, err := g.generateSystemDB()
+	if err != nil {
+		return fmt.Errorf("creating system database: %w", err)
+	}
+	g.BootstrapLines = lines
 
 	// Plugins run before any resource/page generation. The audit log augments
 	// the config after plugins (the AuditLog resource is itself list-only) but
