@@ -2285,6 +2285,47 @@ func TestGeneratePageImportsAreConditional(t *testing.T) {
 	}
 }
 
+// TestGenerateRootRedirect keeps the server root useful when the panel lives
+// under a sub-path: visiting http://localhost:8080/ used to 404 because every
+// dashboard route was mounted under panel.path (e.g. /admin/) only.
+func TestGenerateRootRedirect(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		panelPath    string
+		wantRedirect string
+	}{
+		{name: "sub path", panelPath: "/admin", wantRedirect: `r.Get("/", http.RedirectHandler("/admin/", http.StatusFound).ServeHTTP)`},
+		{name: "trailing slash", panelPath: "/admin/", wantRedirect: `r.Get("/", http.RedirectHandler("/admin/", http.StatusFound).ServeHTTP)`},
+		{name: "root panel", panelPath: "/"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &types.Config{
+				Version: "1",
+				Panel:   types.Panel{ID: "admin", Path: tc.panelPath, Name: "Admin"},
+				Pages:   []types.Page{{Name: "Dashboard", Path: "/dashboard", Default: true}},
+			}
+			dir := t.TempDir()
+			if err := New(cfg, dir).Generate(); err != nil {
+				t.Fatalf("generate: %v", err)
+			}
+			src, err := os.ReadFile(filepath.Join(dir, "internal/panel/router.go"))
+			if err != nil {
+				t.Fatalf("read router.go: %v", err)
+			}
+			got := strings.Contains(string(src), "http.RedirectHandler")
+			if got != (tc.wantRedirect != "") {
+				t.Errorf("root redirect = %v, want %v\n--- generated:\n%s", got, tc.wantRedirect != "", src)
+			}
+			if tc.wantRedirect != "" && !strings.Contains(string(src), tc.wantRedirect) {
+				t.Errorf("missing %q\n--- generated:\n%s", tc.wantRedirect, src)
+			}
+			if _, err := parser.ParseFile(token.NewFileSet(), "router.go", src, 0); err != nil {
+				t.Fatalf("generated router does not parse: %v\n--- generated:\n%s", err, src)
+			}
+		})
+	}
+}
+
 // TestGenerateChartJSAsset ensures generateAssets writes the embedded Chart.js
 // bundle to static/js/chart.js and the pre-built stylesheet to
 // static/css/styles.css (both byte-identical to the embedded copies) and stops

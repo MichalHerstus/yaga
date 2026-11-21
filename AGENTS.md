@@ -396,6 +396,9 @@ Login routes and the auth-protected routes live in a **single** `r.Route(panelPa
 ### Default page mounts at both `/` and its `path`
 A page with `default: true` gets `r.Get("/", handler)` **and** `r.Get(pagePath, handler)`. The generator skips only the literal `/` (the default branch already adds it). Without the `pagePath` mount, a `auth.login.redirect: /admin/dashboard` (the `init` default) 404s because only `/admin/` is registered.
 
+### Server root redirects to the panel path
+When `panel.path` is not `/`, the generated router emits `r.Get("/", http.RedirectHandler("<panel.path>/", http.StatusFound).ServeHTTP)` before the `r.Route(panelPath, ...)` block. Without it, `http://localhost:8080/` 404s while `http://localhost:8080/admin/` works. Use `.ServeHTTP` — chi's `r.Get` expects an `http.HandlerFunc`, not an `http.Handler`. When `panel.path` is `/`, no root redirect is emitted (the default page already owns `/`). Regression: `TestGenerateRootRedirect`.
+
 ### RBAC middleware is appended to middleware.go
 `rbacMiddleware` (`checkRole` + `RBACMiddleware`) is built only when a resource has `policies:` and is appended to the generated `internal/panel/auth/middleware.go`. Do not inject `"strings"` into auth handler.go — only middleware.go uses `strings.Split`. The router wraps protected routes with `r.With(auth.RBACMiddleware(resource, action))`; action routes never use RBAC (plain `r.Post`).
 

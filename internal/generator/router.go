@@ -62,7 +62,21 @@ func (g *Generator) generateRouter() error {
 	})))
 
 	panelPath := "` + g.Config.Panel.Path + `"
+`
 
+	// A non-root panel path would otherwise leave the server root unhandled
+	// (localhost:8080/ -> 404). Redirect it to the panel root, where the
+	// default page (or the auth middleware) takes over. When the panel itself
+	// lives at "/", the default page already handles the root.
+	if panelPath := g.Config.Panel.Path; panelPath != "/" {
+		target := panelPath
+		if !strings.HasSuffix(target, "/") {
+			target += "/"
+		}
+		code += fmt.Sprintf("\tr.Get(\"/\", http.RedirectHandler(%q, http.StatusFound).ServeHTTP)\n", target)
+	}
+
+	code += `
 	r.Route(panelPath, func(r chi.Router) {
 		r.Use(auth.CSRFMiddleware)
 		r.Get("/login", auth.LoginHandler(authDB))
