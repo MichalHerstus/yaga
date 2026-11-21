@@ -395,21 +395,45 @@ func (g *Generator) generatePage(p types.Page) error {
 	}
 
 	jsonImport := ""
+	// fmt and html/template are only referenced by stat widgets with a query,
+	// stats_grid sub-widgets and html widgets. A page with no widgets (the
+	// default emitted by `init --db`), or only chart/table/list widgets, must
+	// not import them or the generated package fails with "imported and not
+	// used".
+	usesFmt, usesTemplate := false, false
 	for _, w := range p.Widgets {
-		if w.Type == "chart" {
+		switch w.Type {
+		case "stat":
+			if w.Query != "" {
+				usesFmt, usesTemplate = true, true
+			}
+		case "stats_grid":
+			if len(w.Widgets) > 0 {
+				usesFmt, usesTemplate = true, true
+			}
+		case "html":
+			usesTemplate = true
+		case "chart":
 			jsonImport = `    "encoding/json"
 `
-			break
 		}
+	}
+
+	fmtImport, templateImport := "", ""
+	if usesFmt {
+		fmtImport = `    "fmt"
+`
+	}
+	if usesTemplate {
+		templateImport = `    "html/template"
+`
 	}
 
 	code := fmt.Sprintf(`package pages
 
 import (
     "database/sql"
-%s    "fmt"
-    "html/template"
-%s    "net/http"
+%s%s%s%s    "net/http"
 
     %q
     auth %q
@@ -437,7 +461,7 @@ func %s(db *sql.DB) http.HandlerFunc {
         }
     }
 }
-`, jsonImport, logImport, g.moduleImport("internal/viewmodels"), g.moduleImport("internal/panel/auth"), g.moduleImport("internal/panel/httperr"), g.moduleImport("internal/views/layout"), g.moduleImport("internal/views/pages"),
+`, jsonImport, fmtImport, templateImport, logImport, g.moduleImport("internal/viewmodels"), g.moduleImport("internal/panel/auth"), g.moduleImport("internal/panel/httperr"), g.moduleImport("internal/views/layout"), g.moduleImport("internal/views/pages"),
 		handlerName, strings.Join(widgetInit, "\n"), p.Name, panelID, panelPath, viewName)
 
 	return os.WriteFile(filepath.Join(dir, name+".go"), []byte(code), 0644)

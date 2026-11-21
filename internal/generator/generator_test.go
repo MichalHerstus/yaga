@@ -2220,6 +2220,71 @@ func TestGenerateWidgetErrorLogging(t *testing.T) {
 	}
 }
 
+// TestGeneratePageImportsAreConditional ensures a page handler imports fmt,
+// html/template and encoding/json only when a widget actually references them.
+// The default dashboard emitted by `init --db` has widgets: [], and a page with
+// only chart/table/list widgets uses neither fmt nor html/template — importing
+// them unconditionally makes the generated package fail with "imported and
+// not used".
+func TestGeneratePageImportsAreConditional(t *testing.T) {
+	cases := []struct {
+		name         string
+		widgets      []types.Widget
+		wantFmt      bool
+		wantTemplate bool
+		wantJSON     bool
+	}{
+		{name: "no widgets"},
+		{name: "chart only", widgets: []types.Widget{{Type: "chart", Chart: &types.ChartConfig{Type: "bar"}, Query: "SELECT 1, 2"}}, wantJSON: true},
+		{name: "table and list", widgets: []types.Widget{
+			{Type: "table", Query: "SELECT 1"}, {Type: "list", Query: "SELECT 1"},
+		}},
+		{name: "stat without query", widgets: []types.Widget{{Type: "stat", Label: "Zero"}}},
+		{name: "stat with query", widgets: []types.Widget{{Type: "stat", Query: "SELECT 1"}}, wantFmt: true, wantTemplate: true},
+		{name: "html only", widgets: []types.Widget{{Type: "html", Query: "SELECT 'x'"}}, wantTemplate: true},
+		{name: "stats grid with subwidgets", widgets: []types.Widget{
+			{Type: "stats_grid", Widgets: []types.Widget{{Type: "stat", Query: "SELECT 1"}}},
+		}, wantFmt: true, wantTemplate: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &types.Config{
+				Version: "1",
+				Panel:   types.Panel{ID: "admin", Path: "/admin", Name: "Admin"},
+				Pages:   []types.Page{{Name: "Dashboard", Path: "/dashboard", Widgets: tc.widgets}},
+			}
+			dir := t.TempDir()
+			if err := New(cfg, dir).Generate(); err != nil {
+				t.Fatalf("generate: %v", err)
+			}
+			page, err := os.ReadFile(filepath.Join(dir, "internal/panel/pages", "dashboard.go"))
+			if err != nil {
+				t.Fatalf("read dashboard.go: %v", err)
+			}
+			f, err := parser.ParseFile(token.NewFileSet(), "dashboard.go", page, 0)
+			if err != nil {
+				t.Fatalf("generated page does not parse: %v\n--- generated:\n%s", err, page)
+			}
+			imports := map[string]bool{}
+			for _, imp := range f.Imports {
+				imports[strings.Trim(imp.Path.Value, `"`)] = true
+			}
+			for _, c := range []struct {
+				path string
+				want bool
+			}{
+				{"fmt", tc.wantFmt},
+				{"html/template", tc.wantTemplate},
+				{"encoding/json", tc.wantJSON},
+			} {
+				if got := imports[c.path]; got != c.want {
+					t.Errorf("import %q = %v, want %v\n--- generated:\n%s", c.path, got, c.want, page)
+				}
+			}
+		})
+	}
+}
+
 // TestGenerateChartJSAsset ensures generateAssets writes the embedded Chart.js
 // bundle to static/js/chart.js and the pre-built stylesheet to
 // static/css/styles.css (both byte-identical to the embedded copies) and stops
@@ -3032,7 +3097,7 @@ func spaceyConfig() *types.Config {
 						{Name: "id", Type: "integer"},
 						{Name: "size range", Label: "Size range", Type: "string"},
 					},
-					Export:  []string{"size range"},
+					Export:   []string{"size range"},
 					Computed: []types.ComputedField{{Name: "gross total", Label: "Gross total", Type: "float", Expression: "price * qty"}},
 				},
 				Card: &types.CardConfig{
@@ -3058,7 +3123,7 @@ func spaceyConfig() *types.Config {
 				Actions: []types.Action{
 					{Name: "mark done", Query: "UPDATE t SET status='done' WHERE id=$1", Bulk: true},
 				},
-				Policies: &types.Policy{ViewAny: "admin|manager"},
+				Policies:  &types.Policy{ViewAny: "admin|manager"},
 				ImportCSV: true,
 			},
 		},
