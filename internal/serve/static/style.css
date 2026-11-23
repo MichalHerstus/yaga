@@ -158,6 +158,13 @@ h3 { margin: 22px 0 10px; font-size: 15px; color: var(--accent-2); }
 }
 .field input:focus, .field select:focus, .field textarea:focus { outline: 1px solid var(--accent); }
 .field textarea { font-family: var(--mono); font-size: 12px; min-height: 220px; resize: vertical; }
+.field input.readonly, .field select.readonly, .field textarea.readonly,
+input.readonly, select.readonly, textarea.readonly {
+  background: var(--bg-light);
+  color: var(--text-faint);
+  cursor: not-allowed;
+}
+input.readonly::placeholder { color: var(--text-faint); }
 .color-field { display: flex; gap: 8px; align-items: center; }
 .color-field input[type=color] {
   width: 46px;
@@ -449,14 +456,65 @@ table.rows .row-actions { white-space: nowrap; width: 1%; text-align: right; }
   padding: 2px 6px;
 }
 
-/* icon select field */
-.icon-select {
+/* icon select field (custom dropdown showing icon image + name) */
+.icon-field-wrap { position: relative; }
+.icon-trigger {
   width: 100%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-alt);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  text-align: left;
 }
-.icon-chip {
-  font-size: 12px;
-  font-family: var(--mono);
+.icon-trigger:hover { border-color: var(--accent); }
+.icon-trigger:focus-visible { outline: 1px solid var(--accent); }
+.icon-trigger-svg { flex-shrink: 0; }
+.icon-trigger-svg svg { width: 16px; height: 16px; }
+.icon-trigger-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; font-weight: 600; }
+.icon-trigger-name.empty { color: var(--text-faint); font-weight: 400; }
+.icon-chevron { flex-shrink: 0; font-size: 11px; color: var(--text-faint); }
+
+.icon-dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  margin-top: 6px;
+  background: var(--bg-alt);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.10);
+  z-index: 100;
+  max-height: 260px;
+  overflow-y: auto;
+  display: none;
 }
+.icon-dropdown.open { display: block; }
+.icon-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 7px 10px;
+  font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
+}
+.icon-option:hover { background: var(--bg-hover); }
+.icon-option.icon-highlight { background: var(--bg-light); }
+.icon-option.icon-selected { font-weight: 700; background: var(--bg-light); }
+.icon-option svg { width: 16px; height: 16px; flex-shrink: 0; color: var(--text-dim); }
+.icon-option .icon-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.icon-option .icon-name.empty { color: var(--text-faint); font-weight: 400; }
+.icon-divider { height: 1px; background: var(--border); margin: 4px 0; }
 
 /* image field (logo / favicon) */
 .image-field-wrap input[type=file] {
@@ -473,9 +531,9 @@ table.rows .row-actions { white-space: nowrap; width: 1%; text-align: right; }
   display: flex; align-items: center; gap: 6px;
   padding: 8px 10px; border-radius: 6px; cursor: pointer;
   font-weight: 600; font-size: 13px; color: var(--text);
-  background: var(--bg-hover);
 }
 .sidebar-section-head:hover { background: var(--bg-light); }
+.sidebar-section-head.active { background: var(--bg-hover); }
 .sidebar-chevron { font-size: 10px; width: 12px; text-align: center; }
 .sidebar-section-items { display: flex; flex-direction: column; gap: 2px; padding-left: 6px; }
 .tab-sub {
@@ -485,10 +543,19 @@ table.rows .row-actions { white-space: nowrap; width: 1%; text-align: right; }
 .tab-sub:hover { background: var(--bg-hover); color: var(--text); }
 .tab-sub.active { background: var(--bg-light); color: var(--text); font-weight: 600; }
 
+.resource-tab {
+  padding: 6px 12px; font-size: 13px;
+  background: transparent; color: var(--text-dim);
+  border: 1px solid var(--border); border-radius: 6px;
+  margin-right: 6px; cursor: pointer;
+}
+.resource-tab:hover { background: var(--bg-hover); color: var(--text); }
+.resource-tab.active { background: var(--bg-light); color: var(--text); font-weight: 600; border-color: var(--accent); }
+
 /* topbar shortcut buttons active state */
 .header-right .btn.active { background: var(--accent-2); color: var(--bg-alt); font-weight: 600; }
 
-/* resource table actions */
+/* dataview table actions */
 table.rows .row-actions .btn { margin: 0 3px; }
 
 /* navigation drag-and-drop */

@@ -9,6 +9,8 @@ const state = {
   configPath: "",
   page: "panel",
   resource: null, // drill-in: resource being edited
+  resourceEditMode: true, // false = view (read-only), true = edit
+  resourceTab: "settings", // active sub-tab inside the dataview editor
   pageName: null, // drill-in: page being edited
   dirty: false,
   rawDirty: false, // raw-tab textarea has unsaved typing
@@ -392,36 +394,46 @@ function fieldEl(grid, label) {
   return wrap;
 }
 
-function textField(grid, label, obj, key) {
+function textField(grid, label, obj, key, readOnly) {
   const wrap = fieldEl(grid, label);
   const i = document.createElement("input");
   i.type = "text";
   i.value = obj[key] != null ? obj[key] : "";
-  i.addEventListener("change", () => {
-    const v = i.value.trim();
-    if (v === "") delete obj[key];
-    else obj[key] = v;
-    markDirty();
-  });
+  if (readOnly) {
+    i.readOnly = true;
+    i.classList.add("readonly");
+  } else {
+    i.addEventListener("change", () => {
+      const v = i.value.trim();
+      if (v === "") delete obj[key];
+      else obj[key] = v;
+      markDirty();
+    });
+  }
   wrap.appendChild(i);
   return i;
 }
 
-function numField(grid, label, obj, key) {
+function numField(grid, label, obj, key, readOnly) {
   const wrap = fieldEl(grid, label);
   const i = document.createElement("input");
   i.type = "number";
   i.value = obj[key] != null ? obj[key] : "";
-  i.addEventListener("change", () => {
-    if (i.value === "") delete obj[key];
-    else obj[key] = parseInt(i.value, 10);
-    markDirty();
-  });
+  if (readOnly) {
+    i.readOnly = true;
+    i.classList.add("readonly");
+  } else {
+    i.addEventListener("change", () => {
+      if (i.value === "") delete obj[key];
+      else obj[key] = parseInt(i.value, 10);
+      markDirty();
+    });
+  }
   wrap.appendChild(i);
   return i;
 }
 
-function colorField(grid, label, obj, key, fallback) {
+function colorField(grid, label, obj, key, fallback, readOnly) {
   const wrap = fieldEl(grid, label);
   const row = document.createElement("div");
   row.className = "color-field";
@@ -432,32 +444,44 @@ function colorField(grid, label, obj, key, fallback) {
   const cur = /^#[0-9a-fA-F]{6}$/.test(obj[key] || "") ? obj[key] : (fallback || "#6366f1");
   swatch.value = cur;
   text.value = cur;
-  swatch.addEventListener("change", () => {
-    obj[key] = swatch.value;
-    text.value = swatch.value;
-    markDirty();
-  });
-  text.addEventListener("change", () => {
-    const v = text.value.trim();
-    if (/^#[0-9a-fA-F]{6}$/.test(v)) {
-      obj[key] = v.toLowerCase();
-      swatch.value = obj[key];
+  if (readOnly) {
+    swatch.disabled = true;
+    text.readOnly = true;
+    swatch.classList.add("readonly");
+    text.classList.add("readonly");
+  } else {
+    swatch.addEventListener("change", () => {
+      obj[key] = swatch.value;
+      text.value = swatch.value;
       markDirty();
-    }
-  });
+    });
+    text.addEventListener("change", () => {
+      const v = text.value.trim();
+      if (/^#[0-9a-fA-F]{6}$/.test(v)) {
+        obj[key] = v.toLowerCase();
+        swatch.value = obj[key];
+        markDirty();
+      }
+    });
+  }
   row.append(swatch, text);
   wrap.appendChild(row);
   return wrap;
 }
 
-function boolField(grid, label, obj, key) {
+function boolField(grid, label, obj, key, readOnly) {
   const wrap = document.createElement("div");
   wrap.className = "checkbox-row field";
   const cb = document.createElement("input");
   cb.type = "checkbox";
   cb.id = "cb-" + key + "-" + Math.random().toString(36).slice(2, 7);
   cb.checked = !!obj[key];
-  cb.addEventListener("change", () => { obj[key] = cb.checked; markDirty(); });
+  if (readOnly) {
+    cb.disabled = true;
+    cb.classList.add("readonly");
+  } else {
+    cb.addEventListener("change", () => { obj[key] = cb.checked; markDirty(); });
+  }
   const l = document.createElement("label");
   l.htmlFor = cb.id;
   l.textContent = label;
@@ -466,7 +490,7 @@ function boolField(grid, label, obj, key) {
   return cb;
 }
 
-function selectField(grid, label, obj, key, options, { allowEmpty } = {}) {
+function selectField(grid, label, obj, key, options, { allowEmpty } = {}, readOnly) {
   const wrap = fieldEl(grid, label);
   const s = document.createElement("select");
   if (allowEmpty) {
@@ -482,28 +506,38 @@ function selectField(grid, label, obj, key, options, { allowEmpty } = {}) {
     s.appendChild(o);
   }
   s.value = obj[key] != null ? obj[key] : "";
-  s.addEventListener("change", () => {
-    if (s.value === "") delete obj[key];
-    else obj[key] = s.value;
-    markDirty();
-  });
+  if (readOnly) {
+    s.disabled = true;
+    s.classList.add("readonly");
+  } else {
+    s.addEventListener("change", () => {
+      if (s.value === "") delete obj[key];
+      else obj[key] = s.value;
+      markDirty();
+    });
+  }
   wrap.appendChild(s);
   return s;
 }
 
-function stringListField(grid, label, arrObj, key) {
+function stringListField(grid, label, arrObj, key, readOnly) {
   const wrap = fieldEl(grid, label);
   const i = document.createElement("input");
   i.type = "text";
   const cur = arrObj[key] || [];
   i.value = cur.join(", ");
   i.placeholder = "comma-separated";
-  i.addEventListener("change", () => {
-    const vals = i.value.split(",").map((s) => s.trim()).filter(Boolean);
-    if (vals.length) arrObj[key] = vals;
-    else delete arrObj[key];
-    markDirty();
-  });
+  if (readOnly) {
+    i.readOnly = true;
+    i.classList.add("readonly");
+  } else {
+    i.addEventListener("change", () => {
+      const vals = i.value.split(",").map((s) => s.trim()).filter(Boolean);
+      if (vals.length) arrObj[key] = vals;
+      else delete arrObj[key];
+      markDirty();
+    });
+  }
   wrap.appendChild(i);
   return i;
 }
@@ -547,72 +581,199 @@ const ICON_OPTIONS = [
   { name: "plus", label: "Plus" },
 ];
 
-function iconSelectField(grid, label, obj, key) {
+/* ---------- icon images (SVG path data, mirrors the generator's iconSVG / iconNav / actionIcon) ---------- */
+const ICON_SVGS = {
+  users: "M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z",
+  chart: "M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z",
+  dollar: "M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z",
+  check: "M5 13l4 4L19 7",
+  clock: "M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z",
+  cog: "M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z M15 12a3 3 0 11-6 0 3 3 0 016 0z",
+  bell: "M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9",
+  home: "M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6",
+  mail: "M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z",
+  lock: "M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z",
+  folder: "M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z",
+  user: "M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z",
+  settings: "M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4",
+  document: "M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z",
+  shield: "M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z",
+  layout: "M3 10h18M3 14h18m-9-4v8m-7 0h14a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z",
+  list: "M8 12h.01M12 12h.01M16 12h.01M9 16h.01M13 16h.01M15 20h.01M21 12h.01M3 12h.01M3 16h.01M21 16h.01M16 20h.01M12 8h.01M8 20h.01M12 4h.01M16 20h.01M20 16h.01M20 12h.01M4 4h.01M4 8h.01M4 20h.01",
+  grid: "M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z",
+  "user-nav": "M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z",
+  report: "M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z",
+  archive: "M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M7 8v10a2 2 0 002 2h6a2 2 0 002-2V8m-9 4h6",
+  play: "M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664zM21 12a9 9 0 11-18 0 9 9 0 0118 0z",
+  pause: "M10 9v6m4-6v6m7-3a9 9 0 11-18 0 9 9 0 0118 0z",
+  trash: "M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16",
+  download: "M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4",
+  send: "M12 19l9 2-9-18-9 18 9-2zm0 0v-8",
+  star: "M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.196-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.783-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z",
+  refresh: "M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15",
+  x: "M6 18L18 6M6 6l12 12",
+  edit: "M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z",
+  save: "M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21-3.582-4-8-4S0 4.79 0 7z",
+  cancel: "M8 8l8 8M8 16l8-8",
+  "arrow-right": "M9 5l7 7-7 7",
+  plus: "M12 4v16m8-8H4",
+};
+
+function iconSelectField(grid, label, obj, key, readOnly) {
   const wrap = fieldEl(grid, label);
   wrap.classList.add("icon-field-wrap");
+  wrap.style.position = "relative"; // containing block for the absolutely positioned dropdown
 
-  const sel = document.createElement("select");
-  sel.className = "icon-select";
-  sel.value = obj[key] || "";
+  const trigger = document.createElement("button");
+  trigger.type = "button";
+  trigger.className = "icon-trigger";
+  trigger.setAttribute("aria-haspopup", "listbox");
+  trigger.setAttribute("aria-expanded", "false");
 
-  const none = document.createElement("option");
-  none.value = "";
-  none.textContent = "— none —";
-  sel.appendChild(none);
+  const lead = document.createElement("span");
+  lead.className = "icon-trigger-lead";
+  const svgWrap = document.createElement("span");
+  svgWrap.className = "icon-trigger-svg";
+  const nameText = document.createElement("span");
+  nameText.className = "icon-trigger-name";
+  const chev = document.createElement("span");
+  chev.className = "icon-chevron";
+  chev.textContent = "▾";
 
-  for (const ic of ICON_OPTIONS) {
-    const o = document.createElement("option");
-    o.value = ic.name;
-    o.textContent = ic.label;
-    sel.appendChild(o);
+  lead.append(svgWrap, nameText);
+  trigger.append(lead, chev);
+  if (readOnly) {
+    trigger.disabled = true;
+    trigger.classList.add("readonly");
   }
 
-  const preview = document.createElement("div");
-  preview.className = "icon-preview";
-  preview.style.marginTop = "6px";
-  preview.style.fontSize = "12px";
-  preview.style.color = "var(--text-dim)";
-  if (obj[key]) {
-    const chip = document.createElement("span");
-    chip.className = "icon-chip";
-    chip.style.display = "inline-flex";
-    chip.style.alignItems = "center";
-    chip.style.gap = "6px";
-    chip.style.padding = "4px 8px";
-    chip.style.border = "1px solid var(--border)";
-    chip.style.borderRadius = "4px";
-    chip.style.background = "var(--bg)";
-    chip.textContent = obj[key];
-    preview.appendChild(chip);
-  } else {
-    preview.textContent = "No icon selected.";
-  }
+  const panel = document.createElement("div");
+  panel.className = "icon-dropdown";
+  panel.setAttribute("role", "listbox");
 
-  sel.addEventListener("change", () => {
-    const v = sel.value.trim();
-    if (v === "") delete obj[key];
-    else obj[key] = v;
-    preview.innerHTML = "";
-    if (v) {
-      const chip = document.createElement("span");
-      chip.className = "icon-chip";
-      chip.style.display = "inline-flex";
-      chip.style.alignItems = "center";
-      chip.style.gap = "6px";
-      chip.style.padding = "4px 8px";
-      chip.style.border = "1px solid var(--border)";
-      chip.style.borderRadius = "4px";
-      chip.style.background = "var(--bg)";
-      chip.textContent = v;
-      preview.appendChild(chip);
-    } else {
-      preview.textContent = "No icon selected.";
+  const rows = [];
+
+  function svgEl(name) {
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("viewBox", "0 0 24 24");
+    svg.setAttribute("width", "16");
+    svg.setAttribute("height", "16");
+    const d = ICON_SVGS[name];
+    if (d) {
+      const p = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      p.setAttribute("stroke", "currentColor");
+      p.setAttribute("stroke-linecap", "round");
+      p.setAttribute("stroke-linejoin", "round");
+      p.setAttribute("stroke-width", "2");
+      p.setAttribute("fill", "none");
+      p.setAttribute("d", d);
+      svg.appendChild(p);
     }
+    return svg;
+  }
+
+  function setSelection(name) {
+    if (readOnly) return;
+    if (name === "") delete obj[key];
+    else obj[key] = name;
     markDirty();
+    renderTrigger();
+    rows.forEach((r) => {
+      const active = r.dataset.name === name;
+      r.classList.toggle("icon-selected", active);
+      r.setAttribute("aria-selected", active ? "true" : "false");
+    });
+    highlight = rows.findIndex((r) => r.dataset.name === name);
+    refreshHighlight();
+    close();
+  }
+
+  function renderTrigger() {
+    const v = obj[key] || "";
+    svgWrap.innerHTML = "";
+    if (v && ICON_SVGS[v]) {
+      svgWrap.appendChild(svgEl(v));
+      nameText.textContent = v;
+      nameText.className = "icon-trigger-name";
+    } else {
+      nameText.textContent = "— none —";
+      nameText.className = "icon-trigger-name empty";
+    }
+  }
+
+  function addRow(name, label) {
+    const row = document.createElement("div");
+    row.className = "icon-option";
+    row.setAttribute("role", "option");
+    row.dataset.name = name;
+    row.appendChild(svgEl(name));
+    const t = document.createElement("span");
+    t.className = "icon-name" + (name === "" ? " empty" : "");
+    t.textContent = label;
+    row.appendChild(t);
+    row.addEventListener("mousedown", (e) => e.preventDefault()); // keep focus on trigger
+    row.addEventListener("click", () => setSelection(name));
+    panel.appendChild(row);
+    rows.push(row);
+  }
+
+  addRow("", "— none —");
+  const sep = document.createElement("div");
+  sep.className = "icon-divider";
+  panel.appendChild(sep);
+  for (const ic of ICON_OPTIONS) addRow(ic.name, ic.label);
+
+  let highlight = rows.findIndex((r) => r.dataset.name === (obj[key] || ""));
+  function refreshHighlight() {
+    rows.forEach((r, i) => {
+      const active = i === highlight;
+      r.classList.toggle("icon-highlight", active);
+      if (!active) r.classList.toggle("icon-selected", r.dataset.name === (obj[key] || ""));
+      r.setAttribute("aria-selected", active ? "true" : "false");
+    });
+    if (highlight >= 0) {
+      const r = rows[highlight];
+      panel.scrollTop = Math.max(0, r.offsetTop - panel.clientHeight + r.offsetHeight);
+    }
+  }
+
+  function open() {
+    panel.classList.add("open");
+    trigger.setAttribute("aria-expanded", "true");
+    highlight = rows.findIndex((r) => r.dataset.name === (obj[key] || ""));
+    refreshHighlight();
+    document.addEventListener("mousedown", onDocMouseDown);
+  }
+  function close() {
+    panel.classList.remove("open");
+    trigger.setAttribute("aria-expanded", "false");
+    document.removeEventListener("mousedown", onDocMouseDown);
+  }
+  function onDocMouseDown(e) {
+    if (!wrap.contains(e.target)) close();
+  }
+
+  trigger.addEventListener("click", (e) => {
+    e.stopPropagation();
+    panel.classList.contains("open") ? close() : open();
+  });
+  trigger.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); open(); }
+    else if (e.key === "Escape") close();
+  });
+  panel.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") { e.preventDefault(); close(); trigger.focus(); }
+    else if (e.key === "ArrowDown") { e.preventDefault(); highlight = Math.min(highlight + 1, rows.length - 1); refreshHighlight(); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); highlight = Math.max(highlight - 1, 0); refreshHighlight(); }
+    else if (e.key === "Enter" || e.key === " ") { e.preventDefault(); if (rows[highlight]) setSelection(rows[highlight].dataset.name); close(); trigger.focus(); }
+    else if (e.key === "Home") { e.preventDefault(); highlight = 0; refreshHighlight(); }
+    else if (e.key === "End") { e.preventDefault(); highlight = rows.length - 1; refreshHighlight(); }
   });
 
-  wrap.append(sel, preview);
-  return sel;
+  wrap.append(trigger, panel);
+  renderTrigger();
+  refreshHighlight();
+  return trigger;
 }
 
 /* ---------- image field (logo / favicon) ---------- */
@@ -763,6 +924,8 @@ function collectionEditor(container, items, schema, opts = {}) {
   wrap.className = "table-wrap";
   container.appendChild(wrap);
 
+  const readOnly = !!opts.readOnly;
+
   function cellInput(s, item, onChange) {
     const set = (v) => { item[s.key] = v; onChange(); };
     if (s.type === "lua") {
@@ -771,13 +934,19 @@ function collectionEditor(container, items, schema, opts = {}) {
         else item[s.key] = v;
         onChange();
       });
+      if (readOnly) el.readOnly = true;
       return el;
     }
     if (s.type === "bool") {
       const cb = document.createElement("input");
       cb.type = "checkbox";
       cb.checked = !!item[s.key];
-      cb.addEventListener("change", () => set(cb.checked));
+      if (readOnly) {
+        cb.disabled = true;
+        cb.classList.add("readonly");
+      } else {
+        cb.addEventListener("change", () => set(cb.checked));
+      }
       return cb;
     }
     if (s.type === "select") {
@@ -793,24 +962,34 @@ function collectionEditor(container, items, schema, opts = {}) {
         el.appendChild(opt);
       }
       el.value = item[s.key] != null ? item[s.key] : "";
-      el.addEventListener("change", () => {
-        if (el.value === "") delete item[s.key];
-        else item[s.key] = el.value;
-        onChange();
-      });
+      if (readOnly) {
+        el.disabled = true;
+        el.classList.add("readonly");
+      } else {
+        el.addEventListener("change", () => {
+          if (el.value === "") delete item[s.key];
+          else item[s.key] = el.value;
+          onChange();
+        });
+      }
       return el;
     }
     const el = document.createElement("input");
     el.type = s.type === "number" ? "number" : "text";
     el.value = item[s.key] != null ? item[s.key] : "";
-    el.addEventListener("change", () => {
-      let v = el.value;
-      if (s.type === "number") v = v === "" ? undefined : parseInt(v, 10);
-      else v = v.trim() === "" ? undefined : v;
-      if (v === undefined) delete item[s.key];
-      else item[s.key] = v;
-      onChange();
-    });
+    if (readOnly) {
+      el.readOnly = true;
+      el.classList.add("readonly");
+    } else {
+      el.addEventListener("change", () => {
+        let v = el.value;
+        if (s.type === "number") v = v === "" ? undefined : parseInt(v, 10);
+        else v = v.trim() === "" ? undefined : v;
+        if (v === undefined) delete item[s.key];
+        else item[s.key] = v;
+        onChange();
+      });
+    }
     return el;
   }
 
@@ -857,12 +1036,20 @@ function collectionEditor(container, items, schema, opts = {}) {
         const extraBtns = typeof opts.rowActions === "function" ? opts.rowActions(item, idx) : [];
         for (const b of extraBtns) td.appendChild(b);
         const jsonBtn = mkButton("⋯", () => editRowJSON(item));
+        if (readOnly) {
+          jsonBtn.disabled = true;
+          jsonBtn.classList.add("readonly");
+        }
         const delBtn = mkButton("✕", () => {
           items.splice(idx, 1);
           markDirty();
           render();
           if (opts.onChange) opts.onChange();
         });
+        if (readOnly) {
+          delBtn.disabled = true;
+          delBtn.classList.add("readonly");
+        }
         td.append(jsonBtn, delBtn);
         tr.appendChild(td);
         tbody.appendChild(tr);
@@ -873,6 +1060,7 @@ function collectionEditor(container, items, schema, opts = {}) {
   }
 
   function editRowJSON(item) {
+    if (readOnly) return;
     openModal(opts.jsonTitle || "Edit entry (JSON, YAML field names)", (body, ok, cancel, close) => {
       const ta = document.createElement("textarea");
       ta.value = JSON.stringify(item, null, 2);
@@ -910,9 +1098,9 @@ const NAV = [
     ["auth", "Auth"],
   ]},
   ["navigation", "Navigation"],
-  ["resources", "Resources"],
+  ["resources", "Dataviews"],
   ["pages", "Pages"],
-  ["schema", "Schema"],
+  ["schema", "Database"],
 ];
 
 /* groups whose section items are collapsed; defaults to open */
@@ -948,7 +1136,7 @@ function renderTabs() {
       li.className = "sidebar-section" + (sidebarCollapsed.has(entry.section) ? " collapsed" : "");
 
       const head = document.createElement("div");
-      head.className = "sidebar-section-head";
+      head.className = "sidebar-section-head" + (entry.items.some(([id]) => id === state.page) ? " active" : "");
       head.addEventListener("click", () => {
         if (sidebarCollapsed.has(entry.section)) sidebarCollapsed.delete(entry.section);
         else sidebarCollapsed.add(entry.section);
@@ -960,7 +1148,7 @@ function renderTabs() {
       const title = document.createElement("span");
       title.className = "sidebar-section-title";
       title.textContent = entry.section;
-      head.append(chev, title);
+      head.append(title, chev);
       li.appendChild(head);
 
       if (!sidebarCollapsed.has(entry.section)) {
@@ -1108,6 +1296,7 @@ function pageAuth() {
 /* ---------- page: Navigation (tree) ---------- */
 
 const NAV_ITEM_TYPES = ["resource", "page", "url"];
+const NAV_ITEM_LABELS = { resource: "Dataview", page: "Page", url: "URL" };
 
 /* groups whose items are collapsed; defaults to open */
 const navCollapsed = new Set();
@@ -1134,7 +1323,7 @@ function navItemModal(c, item, onSave) {
   for (const t of NAV_ITEM_TYPES) {
     const o = document.createElement("option");
     o.value = t;
-    o.textContent = t;
+    o.textContent = NAV_ITEM_LABELS[t] || t;
     typeSel.appendChild(o);
   }
   const cur = item.resource ? "resource" : item.page ? "page" : item.url ? "url" : (item.type || "resource");
@@ -1151,7 +1340,7 @@ function navItemModal(c, item, onSave) {
     const resourceWrap = document.createElement("div");
     resourceWrap.className = "field";
     const resLabel = document.createElement("label");
-    resLabel.textContent = "Resource";
+    resLabel.textContent = "Dataview";
     const resourceSel = document.createElement("select");
     (c.resources || []).forEach((r) => {
       const o = document.createElement("option");
@@ -1211,7 +1400,7 @@ function navItemModal(c, item, onSave) {
 
     ok.addEventListener("click", () => {
       if (typeSel.value === "url" && !urlIn.value.trim()) { err.textContent = "URL is required for url items"; return; }
-      if (typeSel.value === "resource" && !resourceSel.value) { err.textContent = "Pick a resource"; return; }
+      if (typeSel.value === "resource" && !resourceSel.value) { err.textContent = "Pick a dataview"; return; }
       if (typeSel.value === "page" && !pageIn.value.trim()) { err.textContent = "Page is required"; return; }
       for (const k of Object.keys(item)) delete item[k];
       item.type = typeSel.value;
@@ -1323,7 +1512,7 @@ function pageNavigation() {
 
       const badge = document.createElement("span");
       badge.className = "type-badge";
-      badge.textContent = item.type || (item.resource ? "resource" : item.page ? "page" : "url");
+      badge.textContent = item.type ? (NAV_ITEM_LABELS[item.type] || item.type) : (item.resource ? "Dataview" : item.page ? "Page" : "URL");
 
       const label = document.createElement("span");
       label.className = "tree-label";
@@ -1421,7 +1610,7 @@ function pageNavigation() {
         const m = document.createElement("span");
         m.className = "missing";
         m.textContent = "missing";
-        m.title = "references a resource/page that does not exist in this config";
+        m.title = "references a dataview/page that does not exist in this config";
         itemLi.appendChild(m);
       }
       itemLi.appendChild(itActions);
@@ -1440,7 +1629,7 @@ function pageNavigation() {
   root.appendChild(add);
 }
 
-/* ---------- page: Resources ---------- */
+/* ---------- page: Dataviews ---------- */
 
 const COLUMN_SCHEMA = [
   { key: "name", label: "Name" },
@@ -1474,7 +1663,7 @@ const ACTION_SCHEMA = [
 
 const CHILD_SCHEMA = [
   { key: "name", label: "Section name" },
-  { key: "resource", label: "Child resource" },
+  { key: "resource", label: "Child dataview" },
   { key: "column", label: "FK column" },
 ];
 
@@ -1649,18 +1838,18 @@ function renderResourceList() {
   const c = state.config;
   if (!Array.isArray(c.resources)) c.resources = [];
   const root = content();
-  h2(root, "Resources");
+  h2(root, "Dataviews");
 
   const toolbar = document.createElement("div");
   toolbar.className = "toolbar";
   const si = document.createElement("input");
   si.type = "search";
-  si.placeholder = "Search resources by name…";
+  si.placeholder = "Search dataviews by name…";
   si.spellcheck = false;
   si.value = state.resourceSearch;
   toolbar.appendChild(si);
-  const add = btn("+ Add resource", "primary");
-  add.addEventListener("click", () => inputModal("Add resource", "Resource name (PascalCase)", "", (name) => {
+  const add = btn("+ Add dataview", "primary");
+  add.addEventListener("click", () => inputModal("Add dataview", "Dataview name (PascalCase)", "", (name) => {
     c.resources.push({ name });
     markDirty();
     renderResourceList();
@@ -1695,7 +1884,7 @@ function renderResourceList() {
     const tr = document.createElement("tr");
     const td = document.createElement("td");
     td.colSpan = 5;
-    td.textContent = "No resources.";
+    td.textContent = "No dataviews.";
     td.style.textAlign = "center";
     td.style.color = "var(--text-faint)";
     td.style.padding = "20px";
@@ -1714,12 +1903,18 @@ function renderResourceList() {
       tdId.textContent = r.id_column || "id";
       const tdAct = document.createElement("td");
       tdAct.className = "row-actions";
-      const viewBtn = mkButton("View", () => renderResourceEditor(r.name));
-      const editBtn = mkButton("Edit", () => renderResourceEditor(r.name));
+      const viewBtn = mkButton("View", () => {
+        state.resourceEditMode = false;
+        renderResourceEditor(r.name);
+      });
+      const editBtn = mkButton("Edit", () => {
+        state.resourceEditMode = true;
+        renderResourceEditor(r.name);
+      });
       const delBtn = btn("Delete", "danger small");
       delBtn.addEventListener("click", (e) => {
         e.stopPropagation();
-        confirmModal(`Delete resource "${r.name}"?`, () => {
+        confirmModal(`Delete dataview "${r.name}"?`, () => {
           const idx = c.resources.indexOf(r);
           if (idx >= 0) {
             c.resources.splice(idx, 1);
@@ -1768,7 +1963,11 @@ function renderResourceEditor(name) {
   if (!r) { renderResourceList(); return; }
   const root = content();
 
-  const back = btn("← Resources", "small");
+  const readOnly = !state.resourceEditMode;
+  const tab = state.resourceTab || "settings";
+
+  const back = btn("← Dataviews", "small");
+  back.classList.add("nav-back");
   back.addEventListener("click", () => { state.resource = null; renderPage(); });
   root.appendChild(back);
 
@@ -1776,175 +1975,70 @@ function renderResourceEditor(name) {
   head.className = "toolbar";
   const t = document.createElement("h2");
   t.style.margin = "0";
-  t.textContent = "Resource: " + r.name;
+  t.textContent = "Dataview: " + r.name;
   head.appendChild(t);
   root.appendChild(head);
 
+  /* sub-tab bar */
+  const tabBar = document.createElement("div");
+  tabBar.className = "toolbar";
+  const tabs = [
+    { id: "settings", label: "Settings" },
+    { id: "list", label: "List" },
+    { id: "form", label: "Form" },
+    { id: "actions", label: "Actions" },
+  ];
+  for (const tb of tabs) {
+    const b = mkButton(tb.label, () => {
+      state.resourceTab = tb.id;
+      renderResourceEditor(name);
+    });
+    if (tb.id === tab) b.classList.add("active");
+    b.classList.add("resource-tab");
+    tabBar.appendChild(b);
+  }
+  root.appendChild(tabBar);
+
+  const body = document.createElement("div");
+  root.appendChild(body);
+
+  if (tab === "settings") renderResourceSettings(body, r, readOnly);
+  else if (tab === "list") renderResourceListTab(body, r, readOnly);
+  else if (tab === "form") renderResourceFormTab(body, r, readOnly);
+  else if (tab === "actions") renderResourceActionsTab(body, r, readOnly);
+
+  if (readOnly) {
+    root.querySelectorAll("input, select, textarea, button").forEach((el) => {
+      if (el.classList.contains("nav-back") || el.classList.contains("resource-tab")) return;
+      el.disabled = true;
+    });
+  }
+}
+
+/* ---------- sub-tab: Settings (identity + policies + children) ---------- */
+
+function renderResourceSettings(root, r, readOnly) {
   const card = cardEl(root);
   const g = gridWrap(card);
-  textField(g, "Name", r, "name");
-  textField(g, "Label", r, "label");
-  iconSelectField(g, "Icon", r, "icon");
-  textField(g, "Group", r, "group");
-  textField(g, "Table", r, "table");
-  textField(g, "ID type", r, "id_type");
-  textField(g, "ID column", r, "id_column");
-  boolField(g, "Import CSV", r, "import_csv");
-
-  /* List */
-  if (!r.list) r.list = {};
-  h3(root, "List");
-  const cardL = cardEl(root);
-  const gL = gridWrap(cardL);
-  textField(gL, "Query", r.list, "query");
-  textField(gL, "Count query", r.list, "count_query");
-  numField(gL, "Per page", r.list, "per_page");
-  textField(gL, "Default sort (leading - = desc)", r.list, "default_sort");
-  stringListField(gL, "CSV export columns", r.list, "export");
-  if (!r.list.columns) r.list.columns = [];
-  const lCols = document.createElement("div");
-  lCols.className = "toolbar";
-  const lc = document.createElement("h3");
-  lc.className = "sub-heading";
-  lc.textContent = "Columns";
-  lCols.appendChild(lc);
-  const addCol = btn("+ Add column", "small");
-  addCol.addEventListener("click", () => { r.list.columns.push({}); markDirty(); renderResourceEditor(name); });
-  lCols.appendChild(addCol);
-  cardL.appendChild(lCols);
-  collectionEditor(cardL, r.list.columns, COLUMN_SCHEMA, { jsonTitle: "Edit column (JSON)" });
-
-  if (!r.list.computed) r.list.computed = [];
-  const lComp = document.createElement("div");
-  lComp.className = "toolbar";
-  const lcp = document.createElement("h3");
-  lcp.className = "sub-heading";
-  lcp.textContent = "Computed columns";
-  lComp.appendChild(lcp);
-  const addComp = btn("+ Add computed", "small");
-  addComp.addEventListener("click", () => { r.list.computed.push({}); markDirty(); renderResourceEditor(name); });
-  lComp.appendChild(addComp);
-  cardL.appendChild(lComp);
-  collectionEditor(cardL, r.list.computed, COMPUTED_SCHEMA, { jsonTitle: "Edit computed (JSON)" });
-
-  /* Card */
-  if (!r.card) r.card = {};
-  h3(root, "Card");
-  const cardC = cardEl(root);
-  const gC = gridWrap(cardC);
-  numField(gC, "Columns", r.card, "columns");
-  numField(gC, "Rows", r.card, "rows");
-  textField(gC, "Kanban field", r.card, "kanban_field");
-  if (!r.card.fields) r.card.fields = [];
-  const cCols = document.createElement("div");
-  cCols.className = "toolbar";
-  const cc = document.createElement("h3");
-  cc.className = "sub-heading";
-  cc.textContent = "Card fields";
-  cCols.appendChild(cc);
-  const addCardCol = btn("+ Add field", "small");
-  addCardCol.addEventListener("click", () => { r.card.fields.push({}); markDirty(); renderResourceEditor(name); });
-  cCols.appendChild(addCardCol);
-  cardC.appendChild(cCols);
-  collectionEditor(cardC, r.card.fields, COLUMN_SCHEMA, { jsonTitle: "Edit card field (JSON)" });
-
-  if (!r.card.computed) r.card.computed = [];
-  const cComp = document.createElement("div");
-  cComp.className = "toolbar";
-  const ccp = document.createElement("h3");
-  ccp.className = "sub-heading";
-  ccp.textContent = "Computed fields";
-  cComp.appendChild(ccp);
-  const addCComp = btn("+ Add computed", "small");
-  addCComp.addEventListener("click", () => { r.card.computed.push({}); markDirty(); renderResourceEditor(name); });
-  cComp.appendChild(addCComp);
-  cardC.appendChild(cComp);
-  collectionEditor(cardC, r.card.computed, COMPUTED_SCHEMA, { jsonTitle: "Edit computed (JSON)" });
-
-  /* Detail */
-  if (!r.detail) r.detail = {};
-  h3(root, "Detail");
-  const cardD = cardEl(root);
-  const gD = gridWrap(cardD);
-  textField(gD, "Query", r.detail, "query");
-  if (!r.detail.fields) r.detail.fields = [];
-  const dCols = document.createElement("div");
-  dCols.className = "toolbar";
-  const dc = document.createElement("h3");
-  dc.className = "sub-heading";
-  dc.textContent = "Detail fields";
-  dCols.appendChild(dc);
-  const addDCol = btn("+ Add field", "small");
-  addDCol.addEventListener("click", () => { r.detail.fields.push({}); markDirty(); renderResourceEditor(name); });
-  dCols.appendChild(addDCol);
-  cardD.appendChild(dCols);
-  collectionEditor(cardD, r.detail.fields, COLUMN_SCHEMA, { jsonTitle: "Edit detail field (JSON)" });
-
-  if (!r.detail.computed) r.detail.computed = [];
-  const dComp = document.createElement("div");
-  dComp.className = "toolbar";
-  const dcp = document.createElement("h3");
-  dcp.className = "sub-heading";
-  dcp.textContent = "Computed fields";
-  dComp.appendChild(dcp);
-  const addDComp = btn("+ Add computed", "small");
-  addDComp.addEventListener("click", () => { r.detail.computed.push({}); markDirty(); renderResourceEditor(name); });
-  dComp.appendChild(addDComp);
-  cardD.appendChild(dComp);
-  collectionEditor(cardD, r.detail.computed, COMPUTED_SCHEMA, { jsonTitle: "Edit computed (JSON)" });
-
-  /* Form */
-  if (!r.form) r.form = {};
-  for (const [key, label] of [["create", "Form / Create"], ["update", "Form / Update"], ["delete", "Form / Delete"]]) {
-    if (!r.form[key]) r.form[key] = {};
-    h3(root, label);
-    const cardF = cardEl(root);
-    const gF = gridWrap(cardF);
-    textField(gF, "Query", r.form[key], "query");
-    textField(gF, "Populate query", r.form[key], "populate_query");
-    if (!r.form[key].fields) r.form[key].fields = [];
-    const fCols = document.createElement("div");
-    fCols.className = "toolbar";
-    const fc = document.createElement("h3");
-    fc.className = "sub-heading";
-    fc.textContent = "Fields";
-    fCols.appendChild(fc);
-    const addFCol = btn("+ Add field", "small");
-    addFCol.addEventListener("click", () => { r.form[key].fields.push({}); markDirty(); renderResourceEditor(name); });
-    fCols.appendChild(addFCol);
-    cardF.appendChild(fCols);
-    collectionEditor(cardF, r.form[key].fields, FORM_FIELD_SCHEMA, { jsonTitle: "Edit field (JSON)" });
-  }
-
-  /* Actions */
-  if (!Array.isArray(r.actions)) r.actions = [];
-  h3(root, "Actions");
-  const cardA = cardEl(root);
-  const aCols = document.createElement("div");
-  aCols.className = "toolbar";
-  const ac = document.createElement("h3");
-  ac.className = "sub-heading";
-  ac.textContent = "Actions";
-  aCols.appendChild(ac);
-  const addAct = btn("+ Add action", "small");
-  addAct.addEventListener("click", () => { r.actions.push({}); markDirty(); renderResourceEditor(name); });
-  aCols.appendChild(addAct);
-  cardA.appendChild(aCols);
-  collectionEditor(cardA, r.actions, ACTION_SCHEMA, {
-    jsonTitle: "Edit action (JSON)",
-    renderRow: actionRenderRow(name),
-  });
+  textField(g, "Name", r, "name", readOnly);
+  textField(g, "Label", r, "label", readOnly);
+  iconSelectField(g, "Icon", r, "icon", readOnly);
+  textField(g, "Group", r, "group", readOnly);
+  textField(g, "Table", r, "table", readOnly);
+  textField(g, "ID type", r, "id_type", readOnly);
+  textField(g, "ID column", r, "id_column", readOnly);
+  boolField(g, "Import CSV", r, "import_csv", readOnly);
 
   /* Policies */
   if (!r.policies) r.policies = {};
   h3(root, "Policies");
   const cardP = cardEl(root);
   const gP = gridWrap(cardP);
-  textField(gP, "view_any", r.policies, "view_any");
-  textField(gP, "view", r.policies, "view");
-  textField(gP, "create", r.policies, "create");
-  textField(gP, "update", r.policies, "update");
-  textField(gP, "delete", r.policies, "delete");
+  textField(gP, "view_any", r.policies, "view_any", readOnly);
+  textField(gP, "view", r.policies, "view", readOnly);
+  textField(gP, "create", r.policies, "create", readOnly);
+  textField(gP, "update", r.policies, "update", readOnly);
+  textField(gP, "delete", r.policies, "delete", readOnly);
 
   /* Children */
   if (!Array.isArray(r.children)) r.children = [];
@@ -1957,10 +2051,183 @@ function renderResourceEditor(name) {
   chc.textContent = "Children";
   chCols.appendChild(chc);
   const addCh = btn("+ Add child", "small");
-  addCh.addEventListener("click", () => { r.children.push({}); markDirty(); renderResourceEditor(name); });
+  if (!readOnly) {
+    addCh.addEventListener("click", () => { r.children.push({}); markDirty(); renderResourceEditor(r.name); });
+  }
   chCols.appendChild(addCh);
   cardCh.appendChild(chCols);
-  collectionEditor(cardCh, r.children, CHILD_SCHEMA, { jsonTitle: "Edit child (JSON)" });
+  collectionEditor(cardCh, r.children, CHILD_SCHEMA, { jsonTitle: "Edit child (JSON)", readOnly });
+}
+
+/* ---------- sub-tab: List (list + card + detail) ---------- */
+
+function renderResourceListTab(root, r, readOnly) {
+  /* List */
+  if (!r.list) r.list = {};
+  h3(root, "List");
+  const cardL = cardEl(root);
+  const gL = gridWrap(cardL);
+  textField(gL, "Query", r.list, "query", readOnly);
+  textField(gL, "Count query", r.list, "count_query", readOnly);
+  numField(gL, "Per page", r.list, "per_page", readOnly);
+  textField(gL, "Default sort (leading - = desc)", r.list, "default_sort", readOnly);
+  stringListField(gL, "CSV export columns", r.list, "export", readOnly);
+  if (!r.list.columns) r.list.columns = [];
+  const lCols = document.createElement("div");
+  lCols.className = "toolbar";
+  const lc = document.createElement("h3");
+  lc.className = "sub-heading";
+  lc.textContent = "Columns";
+  lCols.appendChild(lc);
+  if (!readOnly) {
+    const addCol = btn("+ Add column", "small");
+    addCol.addEventListener("click", () => { r.list.columns.push({}); markDirty(); renderResourceEditor(r.name); });
+    lCols.appendChild(addCol);
+  }
+  cardL.appendChild(lCols);
+  collectionEditor(cardL, r.list.columns, COLUMN_SCHEMA, { jsonTitle: "Edit column (JSON)", readOnly });
+
+  if (!r.list.computed) r.list.computed = [];
+  const lComp = document.createElement("div");
+  lComp.className = "toolbar";
+  const lcp = document.createElement("h3");
+  lcp.className = "sub-heading";
+  lcp.textContent = "Computed columns";
+  lComp.appendChild(lcp);
+  if (!readOnly) {
+    const addComp = btn("+ Add computed", "small");
+    addComp.addEventListener("click", () => { r.list.computed.push({}); markDirty(); renderResourceEditor(r.name); });
+    lComp.appendChild(addComp);
+  }
+  cardL.appendChild(lComp);
+  collectionEditor(cardL, r.list.computed, COMPUTED_SCHEMA, { jsonTitle: "Edit computed (JSON)", readOnly });
+
+  /* Card */
+  if (!r.card) r.card = {};
+  h3(root, "Card");
+  const cardC = cardEl(root);
+  const gC = gridWrap(cardC);
+  numField(gC, "Columns", r.card, "columns", readOnly);
+  numField(gC, "Rows", r.card, "rows", readOnly);
+  textField(gC, "Kanban field", r.card, "kanban_field", readOnly);
+  if (!r.card.fields) r.card.fields = [];
+  const cCols = document.createElement("div");
+  cCols.className = "toolbar";
+  const cc = document.createElement("h3");
+  cc.className = "sub-heading";
+  cc.textContent = "Card fields";
+  cCols.appendChild(cc);
+  if (!readOnly) {
+    const addCardCol = btn("+ Add field", "small");
+    addCardCol.addEventListener("click", () => { r.card.fields.push({}); markDirty(); renderResourceEditor(r.name); });
+    cCols.appendChild(addCardCol);
+  }
+  cardC.appendChild(cCols);
+  collectionEditor(cardC, r.card.fields, COLUMN_SCHEMA, { jsonTitle: "Edit card field (JSON)", readOnly });
+
+  if (!r.card.computed) r.card.computed = [];
+  const cComp = document.createElement("div");
+  cComp.className = "toolbar";
+  const ccp = document.createElement("h3");
+  ccp.className = "sub-heading";
+  ccp.textContent = "Computed fields";
+  cComp.appendChild(ccp);
+  if (!readOnly) {
+    const addCComp = btn("+ Add computed", "small");
+    addCComp.addEventListener("click", () => { r.card.computed.push({}); markDirty(); renderResourceEditor(r.name); });
+    cComp.appendChild(addCComp);
+  }
+  cardC.appendChild(cComp);
+  collectionEditor(cardC, r.card.computed, COMPUTED_SCHEMA, { jsonTitle: "Edit computed (JSON)", readOnly });
+
+  /* Detail */
+  if (!r.detail) r.detail = {};
+  h3(root, "Detail");
+  const cardD = cardEl(root);
+  const gD = gridWrap(cardD);
+  textField(gD, "Query", r.detail, "query", readOnly);
+  if (!r.detail.fields) r.detail.fields = [];
+  const dCols = document.createElement("div");
+  dCols.className = "toolbar";
+  const dc = document.createElement("h3");
+  dc.className = "sub-heading";
+  dc.textContent = "Detail fields";
+  dCols.appendChild(dc);
+  if (!readOnly) {
+    const addDCol = btn("+ Add field", "small");
+    addDCol.addEventListener("click", () => { r.detail.fields.push({}); markDirty(); renderResourceEditor(r.name); });
+    dCols.appendChild(addDCol);
+  }
+  cardD.appendChild(dCols);
+  collectionEditor(cardD, r.detail.fields, COLUMN_SCHEMA, { jsonTitle: "Edit detail field (JSON)", readOnly });
+
+  if (!r.detail.computed) r.detail.computed = [];
+  const dComp = document.createElement("div");
+  dComp.className = "toolbar";
+  const dcp = document.createElement("h3");
+  dcp.className = "sub-heading";
+  dcp.textContent = "Computed fields";
+  dComp.appendChild(dcp);
+  if (!readOnly) {
+    const addDComp = btn("+ Add computed", "small");
+    addDComp.addEventListener("click", () => { r.detail.computed.push({}); markDirty(); renderResourceEditor(r.name); });
+    dComp.appendChild(addDComp);
+  }
+  cardD.appendChild(dComp);
+  collectionEditor(cardD, r.detail.computed, COMPUTED_SCHEMA, { jsonTitle: "Edit computed (JSON)", readOnly });
+}
+
+/* ---------- sub-tab: Form (create / update / delete) ---------- */
+
+function renderResourceFormTab(root, r, readOnly) {
+  if (!r.form) r.form = {};
+  for (const [key, label] of [["create", "Form / Create"], ["update", "Form / Update"], ["delete", "Form / Delete"]]) {
+    if (!r.form[key]) r.form[key] = {};
+    h3(root, label);
+    const cardF = cardEl(root);
+    const gF = gridWrap(cardF);
+    textField(gF, "Query", r.form[key], "query", readOnly);
+    textField(gF, "Populate query", r.form[key], "populate_query", readOnly);
+    if (!r.form[key].fields) r.form[key].fields = [];
+    const fCols = document.createElement("div");
+    fCols.className = "toolbar";
+    const fc = document.createElement("h3");
+    fc.className = "sub-heading";
+    fc.textContent = "Fields";
+    fCols.appendChild(fc);
+    if (!readOnly) {
+      const addFCol = btn("+ Add field", "small");
+      addFCol.addEventListener("click", () => { r.form[key].fields.push({}); markDirty(); renderResourceEditor(r.name); });
+      fCols.appendChild(addFCol);
+    }
+    cardF.appendChild(fCols);
+    collectionEditor(cardF, r.form[key].fields, FORM_FIELD_SCHEMA, { jsonTitle: "Edit field (JSON)", readOnly });
+  }
+}
+
+/* ---------- sub-tab: Actions ---------- */
+
+function renderResourceActionsTab(root, r, readOnly) {
+  if (!Array.isArray(r.actions)) r.actions = [];
+  h3(root, "Actions");
+  const cardA = cardEl(root);
+  const aCols = document.createElement("div");
+  aCols.className = "toolbar";
+  const ac = document.createElement("h3");
+  ac.className = "sub-heading";
+  ac.textContent = "Actions";
+  aCols.appendChild(ac);
+  const addAct = btn("+ Add action", "small");
+  if (!readOnly) {
+    addAct.addEventListener("click", () => { r.actions.push({}); markDirty(); renderResourceEditor(r.name); });
+  }
+  aCols.appendChild(addAct);
+  cardA.appendChild(aCols);
+  collectionEditor(cardA, r.actions, ACTION_SCHEMA, {
+    jsonTitle: "Edit action (JSON)",
+    renderRow: actionRenderRow(r.name),
+    readOnly,
+  });
 }
 
 function pageResources() {
@@ -2483,7 +2750,7 @@ function pagePreview() {
 
   const viewSel = document.createElement("select");
   viewSel.id = "preview-view";
-  for (const [v, l] of [["page", "Page"], ["resource", "Resource"]]) {
+  for (const [v, l] of [["page", "Page"], ["resource", "Dataview"]]) {
     const o = document.createElement("option");
     o.value = v;
     o.textContent = l;
@@ -2499,7 +2766,7 @@ function pagePreview() {
     if (ts.length === 0) {
       const o = document.createElement("option");
       o.value = "";
-      o.textContent = state.preview.view === "resource" ? "(no resources)" : "(no pages)";
+      o.textContent = state.preview.view === "resource" ? "(no dataviews)" : "(no pages)";
       targetSel.appendChild(o);
     }
     for (const t of ts) {
