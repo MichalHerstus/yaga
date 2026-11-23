@@ -209,6 +209,8 @@ func ValidateAll(cfg *types.Config) []error {
 	}
 	validateProcedures(cfg, add)
 	validateScripts(cfg, add)
+	validateLoginRedirects(cfg, add)
+	validateAuthRoles(cfg, add)
 	for i, p := range cfg.Pages {
 		if p.Name == "" {
 			add(fmt.Errorf("pages[%d].name is required", i))
@@ -501,6 +503,87 @@ func validateFilter(f *types.FilterConfig) []error {
 		seen[p.Name] = true
 	}
 	return errs
+}
+
+// validateLoginRedirects checks that every configured login redirect target
+// (the global fallback and each per-role override) is an absolute path
+// starting with "/". Non-conforming targets are warnings, not errors: the
+// generator still emits them verbatim and the browser handles the redirect.
+// Params: cfg (the config to validate), add (collects a validation problem).
+func validateLoginRedirects(cfg *types.Config, add func(error)) {
+	lg := cfg.Auth.Login
+	if lg.Redirect != "" && !strings.HasPrefix(lg.Redirect, "/") {
+		add(warn("auth.login.redirect %q should be an absolute path starting with \"/\"", lg.Redirect))
+	}
+	for role, target := range lg.Redirects {
+		if role == "" {
+			add(fmt.Errorf("auth.login.redirects contains an empty role key"))
+			continue
+		}
+		if target != "" && !strings.HasPrefix(target, "/") {
+			add(warn("auth.login.redirects[%q] %q should be an absolute path starting with \"/\"", role, target))
+		}
+	}
+}
+
+// validateAuthRoles checks that every configured role has a non-empty, unique
+// name. It also warns when auth.login.redirects or any RBAC policy references a
+// role that is not declared in auth.roles.
+// Params: cfg (the config to validate), add (collects a validation problem).
+func validateAuthRoles(cfg *types.Config, add func(error)) {
+	roleNames := map[string]bool{}
+	for i, r := range cfg.Auth.Roles {
+		if r.Name == "" {
+			add(fmt.Errorf("auth.roles[%d].name is required", i))
+			continue
+		}
+		if roleNames[r.Name] {
+			add(fmt.Errorf("auth.roles[%d].name %q is duplicated", i, r.Name))
+			continue
+		}
+		roleNames[r.Name] = true
+	}
+
+	// Warn about redirect targets referencing undeclared roles.
+	for role := range cfg.Auth.Login.Redirects {
+		if !roleNames[role] {
+			add(warn("auth.login.redirects[%q] references undeclared role; add it to auth.roles", role))
+		}
+	}
+
+	// Warn about RBAC policy roles referencing undeclared roles.
+	for i, res := range cfg.Resources {
+		if res.Policies != nil {
+			for _, role := range policyRoles(res.Policies.ViewAny, res.Policies.View, res.Policies.Create, res.Policies.Update, res.Policies.Delete) {
+				if !roleNames[role] {
+					add(warn("resources[%d] (%s) policy references undeclared role %q; add it to auth.roles", i, res.Name, role))
+				}
+			}
+		}
+		for _, a := range res.Actions {
+			if a.Policy != "" {
+				for _, role := range strings.Split(a.Policy, "|") {
+					role = strings.TrimSpace(role)
+					if role != "" && !roleNames[role] {
+						add(warn("resources[%d] (%s) action %q policy references undeclared role %q; add it to auth.roles", i, res.Name, a.Name, role))
+					}
+				}
+			}
+		}
+	}
+}
+
+// policyRoles splits pipe-separated policy strings into individual role names.
+func policyRoles(fields ...string) []string {
+	var roles []string
+	for _, f := range fields {
+		for _, r := range strings.Split(f, "|") {
+			if r = strings.TrimSpace(r); r != "" {
+				roles = append(roles, r)
+			}
+		}
+	}
+	return roles
 }
 
 // columnNamesOf extracts the names of a list's columns.

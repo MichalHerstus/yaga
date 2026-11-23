@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -41,6 +42,19 @@ func (g *Generator) generateAuth() error {
 	redirectURL := g.Config.Auth.Login.Redirect
 	if redirectURL == "" {
 		redirectURL = panelPath + "/dashboard"
+	}
+
+	// Build the per-role redirect map literal emitted into the generated
+	// LoginHandler. Sorted for deterministic output. Empty when no redirects
+	// are configured, in which case the single fallback redirectURL is used.
+	var redirectEntries []string
+	for role, target := range g.Config.Auth.Login.Redirects {
+		redirectEntries = append(redirectEntries, fmt.Sprintf("%q: %q", role, target))
+	}
+	sort.Strings(redirectEntries)
+	redirectsLiteral := ""
+	if len(redirectEntries) > 0 {
+		redirectsLiteral = "\n        " + strings.Join(redirectEntries, ",\n        ") + "\n    "
 	}
 
 	// RBAC middleware generation. The middleware set is emitted when any
@@ -297,7 +311,12 @@ func LoginHandler(db *sql.DB) http.HandlerFunc {
         }
 
 %s%s
-        http.Redirect(w, r, %q, http.StatusFound)
+        redirects := map[string]string{%s}
+        target := %q
+        if dest, ok := redirects[userRole]; ok && dest != "" {
+            target = dest
+        }
+        http.Redirect(w, r, target, http.StatusFound)
     }
 }
 
@@ -332,7 +351,7 @@ type LoginPageData struct {
 		panelPath, panelName,
 		panelPath, panelName,
 		loginReset, successSession,
-		redirectURL, panelPath)
+		redirectsLiteral, redirectURL, panelPath)
 
 	if err := os.WriteFile(filepath.Join(dir, "handler.go"), []byte(handlerCode), 0644); err != nil {
 		return err

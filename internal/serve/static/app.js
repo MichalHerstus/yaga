@@ -414,6 +414,60 @@ function textField(grid, label, obj, key, readOnly) {
   return i;
 }
 
+// policyField renders a pipe-separated RBAC policy as a multi-select of
+// configured roles. When no roles are defined yet it falls back to a plain
+// text input.
+function policyField(grid, label, obj, key, roles, readOnly) {
+  const wrap = fieldEl(grid, label);
+  const hint = document.createElement("div");
+  hint.className = "mono";
+  hint.style.fontSize = "11px";
+  hint.style.color = "var(--text-faint)";
+  hint.textContent = "Pipe-separated roles, e.g. admin|manager";
+  wrap.appendChild(hint);
+
+  if (readOnly || roles.length === 0) {
+    const i = document.createElement("input");
+    i.type = "text";
+    i.value = obj[key] != null ? obj[key] : "";
+    if (readOnly) i.readOnly = true;
+    else {
+      i.addEventListener("change", () => {
+        const v = i.value.trim();
+        if (v === "") delete obj[key];
+        else obj[key] = v;
+        markDirty();
+      });
+    }
+    wrap.appendChild(i);
+    return i;
+  }
+
+  const s = document.createElement("select");
+  s.multiple = true;
+  s.size = Math.min(roles.length, 4);
+  const current = (obj[key] || "").split("|").map((r) => r.trim()).filter(Boolean);
+  for (const role of roles) {
+    const o = document.createElement("option");
+    o.value = role;
+    o.textContent = role;
+    if (current.includes(role)) o.selected = true;
+    s.appendChild(o);
+  }
+  if (readOnly) {
+    s.disabled = true;
+    s.classList.add("readonly");
+  } else {
+    s.addEventListener("change", () => {
+      const vals = Array.from(s.selectedOptions).map((o) => o.value);
+      obj[key] = vals.length ? vals.join("|") : "";
+      markDirty();
+    });
+  }
+  wrap.appendChild(s);
+  return s;
+}
+
 function numField(grid, label, obj, key, readOnly) {
   const wrap = fieldEl(grid, label);
   const i = document.createElement("input");
@@ -1280,7 +1334,309 @@ function pageAuth() {
   textField(g, "Provider", a, "provider");
   textField(g, "Auth table", a, "table");
   stringListField(g, "Login fields", a.login, "fields");
-  textField(g, "Login redirect", a.login, "redirect");
+  textField(g, "Login redirect (fallback)", a.login, "redirect");
+  if (!a.login.redirects) a.login.redirects = {};
+  h3(root, "Role redirect targets");
+  const redirectCard = cardEl(root);
+  const redirectGrid = gridWrap(redirectCard);
+  const rhint = document.createElement("p");
+  rhint.className = "mono";
+  rhint.textContent = "When set, a role redirects to its target after login instead of the fallback. Empty = start with no per-role overrides.";
+  redirectGrid.appendChild(rhint);
+
+  const rtable = document.createElement("table");
+  rtable.className = "rows";
+  const rthead = document.createElement("thead");
+  const rhr = document.createElement("tr");
+  ["Role", "Redirect to", ""].forEach((t) => {
+    const th = document.createElement("th");
+    th.textContent = t;
+    rhr.appendChild(th);
+  });
+  rthead.appendChild(rhr);
+  rtable.appendChild(rthead);
+  const rtbody = document.createElement("tbody");
+  rtable.appendChild(rtbody);
+  redirectGrid.appendChild(rtable);
+
+  const renderRedirects = () => {
+    rtbody.innerHTML = "";
+    const roles = (state.config.auth.roles || []).map((r) => r.name);
+    for (const [role, path] of Object.entries(a.login.redirects)) {
+      const tr = document.createElement("tr");
+
+      const tdRole = document.createElement("td");
+      const iRole = document.createElement("select");
+      for (const r of roles) {
+        const o = document.createElement("option");
+        o.value = r;
+        o.textContent = r;
+        o.selected = r === role;
+        iRole.appendChild(o);
+      }
+      // Allow free-text entry for roles not yet defined in auth.roles.
+      const free = document.createElement("option");
+      free.value = role;
+      free.textContent = role + " (custom)";
+      free.selected = true;
+      iRole.appendChild(free);
+      iRole.addEventListener("change", () => {
+        const nr = iRole.value.trim();
+        if (!nr) {
+          delete a.login.redirects[role];
+        } else if (nr !== role && nr !== role + " (custom)") {
+          const p = a.login.redirects[role];
+          delete a.login.redirects[role];
+          a.login.redirects[nr] = p;
+        }
+        markDirty();
+      });
+      tdRole.appendChild(iRole);
+      tr.appendChild(tdRole);
+
+      const tdPath = document.createElement("td");
+      const iPath = document.createElement("input");
+      iPath.type = "text";
+      iPath.value = path;
+      iPath.placeholder = "/admin/dashboard";
+      iPath.addEventListener("change", () => {
+        const r = iRole.value.replace(/ \(custom\)$/, "").trim();
+        const v = iPath.value.trim();
+        if (r) {
+          if (v) a.login.redirects[r] = v;
+          else delete a.login.redirects[r];
+        }
+        markDirty();
+      });
+      tdPath.appendChild(iPath);
+      tr.appendChild(tdPath);
+
+      const tdAct = document.createElement("td");
+      tdAct.className = "row-actions";
+      const del = mkButton("✕", () => {
+        delete a.login.redirects[role];
+        markDirty();
+        renderRedirects();
+      });
+      tdAct.appendChild(del);
+      tr.appendChild(tdAct);
+      rtbody.appendChild(tr);
+    }
+  };
+  renderRedirects();
+
+  const addBtn = mkButton("Add role", () => {
+    const roles = (state.config.auth.roles || []).map((r) => r.name);
+    const resources = (state.config.resources || []).map((r) => {
+      const label = (r.label || r.name).toString();
+      return { value: "/" + String(r.name).toLowerCase(), text: label };
+    });
+    const pages = (state.config.pages || []).map((p) => {
+      const path = p.path || "/" + String(p.name).toLowerCase();
+      return { value: path, text: String(p.name || path) };
+    });
+
+    openModal("Add role redirect", (body, ok, cancel, close) => {
+      const f1 = document.createElement("div");
+      f1.className = "field";
+      const l1 = document.createElement("label");
+      l1.textContent = "Role";
+      const iRole = document.createElement("select");
+      if (roles.length === 0) {
+        const o = document.createElement("option");
+        o.value = "";
+        o.textContent = "(no roles defined — add one under Roles below)";
+        o.disabled = true;
+        iRole.appendChild(o);
+      }
+      for (const role of roles) {
+        const o = document.createElement("option");
+        o.value = role;
+        o.textContent = role;
+        iRole.appendChild(o);
+      }
+      f1.append(l1, iRole);
+      body.appendChild(f1);
+
+      const f2 = document.createElement("div");
+      f2.className = "field";
+      const l2 = document.createElement("label");
+      l2.textContent = "Target type";
+      const tSel = document.createElement("select");
+      ["Resource", "Page", "Custom path"].forEach((t) => {
+        const o = document.createElement("option");
+        o.value = t;
+        o.textContent = t;
+        tSel.appendChild(o);
+      });
+      f2.append(l2, tSel);
+      body.appendChild(f2);
+
+      const f3 = document.createElement("div");
+      f3.className = "field";
+      const l3 = document.createElement("label");
+      l3.textContent = "Target";
+      const tSelEl = document.createElement("select");
+      const cInput = document.createElement("input");
+      cInput.type = "text";
+      cInput.placeholder = "/admin/customers";
+      cInput.style.display = "none";
+      const fill = () => {
+        tSelEl.innerHTML = "";
+        if (tSel.value === "Resource") {
+          for (const r of resources) {
+            const o = document.createElement("option");
+            o.value = r.value;
+            o.textContent = r.text;
+            tSelEl.appendChild(o);
+          }
+        } else if (tSel.value === "Page") {
+          for (const p of pages) {
+            const o = document.createElement("option");
+            o.value = p.value;
+            o.textContent = p.text;
+            tSelEl.appendChild(o);
+          }
+        }
+        tSelEl.style.display = tSel.value === "Custom path" ? "none" : "";
+        cInput.style.display = tSel.value === "Custom path" ? "" : "none";
+      };
+      tSel.addEventListener("change", fill);
+      fill();
+      f3.append(l3, tSelEl, cInput);
+      body.appendChild(f3);
+
+      let resolving = false;
+      ok.textContent = "Add";
+      ok.addEventListener("click", () => {
+        if (resolving) return;
+        const role = iRole.value.trim();
+        if (!role) { iRole.focus(); return; }
+        let target = "";
+        if (tSel.value === "Custom path") target = cInput.value.trim();
+        else target = tSelEl.value;
+        if (!target) { tSelEl.focus(); return; }
+        resolving = true;
+        a.login.redirects[role] = target;
+        markDirty();
+        renderRedirects();
+        resolving = false;
+        close();
+      });
+      setTimeout(() => iRole.focus(), 30);
+    });
+  });
+  redirectGrid.appendChild(addBtn);
+
+  /* ---------- Roles ---------- */
+  if (!Array.isArray(a.roles)) a.roles = [];
+  h3(root, "Roles");
+  const rolesCard = cardEl(root);
+  const rolesGrid = gridWrap(rolesCard);
+  const rhint2 = document.createElement("p");
+  rhint2.className = "mono";
+  rhint2.textContent = "Roles are used for RBAC policies and for seeding demo users in the system DB. Each role gets a demo user {role}@demo.test.";
+  rolesGrid.appendChild(rhint2);
+
+  const rolesTable = document.createElement("table");
+  rolesTable.className = "rows";
+  const rolesThead = document.createElement("thead");
+  const rolesHr = document.createElement("tr");
+  ["Name", "Label", ""].forEach((t) => {
+    const th = document.createElement("th");
+    th.textContent = t;
+    rolesHr.appendChild(th);
+  });
+  rolesThead.appendChild(rolesHr);
+  rolesTable.appendChild(rolesThead);
+  const rolesTbody = document.createElement("tbody");
+  rolesTable.appendChild(rolesTbody);
+  rolesGrid.appendChild(rolesTable);
+
+  const renderRoles = () => {
+    rolesTbody.innerHTML = "";
+    for (const role of a.roles) {
+      const tr = document.createElement("tr");
+
+      const tdName = document.createElement("td");
+      const iName = document.createElement("input");
+      iName.type = "text";
+      iName.value = role.name;
+      iName.placeholder = "e.g. admin";
+      iName.addEventListener("change", () => {
+        const v = iName.value.trim();
+        if (!v) return;
+        role.name = v;
+        markDirty();
+        renderRoles();
+      });
+      tdName.appendChild(iName);
+      tr.appendChild(tdName);
+
+      const tdLabel = document.createElement("td");
+      const iLabel = document.createElement("input");
+      iLabel.type = "text";
+      iLabel.value = role.label || "";
+      iLabel.placeholder = "e.g. Administrator";
+      iLabel.addEventListener("change", () => {
+        role.label = iLabel.value.trim() || "";
+        markDirty();
+      });
+      tdLabel.appendChild(iLabel);
+      tr.appendChild(tdLabel);
+
+      const tdAct = document.createElement("td");
+      tdAct.className = "row-actions";
+      const del = mkButton("✕", () => {
+        const idx = a.roles.indexOf(role);
+        if (idx >= 0) a.roles.splice(idx, 1);
+        markDirty();
+        renderRoles();
+      });
+      tdAct.appendChild(del);
+      tr.appendChild(tdAct);
+      rolesTbody.appendChild(tr);
+    }
+  };
+  renderRoles();
+
+  const addRoleBtn = mkButton("Add role", () => {
+    openModal("Add role", (body, ok, cancel, close) => {
+      const f1 = document.createElement("div");
+      f1.className = "field";
+      const l1 = document.createElement("label");
+      l1.textContent = "Name";
+      const iName = document.createElement("input");
+      iName.type = "text";
+      iName.placeholder = "e.g. admin";
+      f1.append(l1, iName);
+      body.appendChild(f1);
+
+      const f2 = document.createElement("div");
+      f2.className = "field";
+      const l2 = document.createElement("label");
+      l2.textContent = "Label";
+      const iLabel = document.createElement("input");
+      iLabel.type = "text";
+      iLabel.placeholder = "e.g. Administrator";
+      f2.append(l2, iLabel);
+      body.appendChild(f2);
+
+      ok.textContent = "Add";
+      ok.addEventListener("click", () => {
+        const name = iName.value.trim();
+        if (!name) { iName.focus(); return; }
+        if (a.roles.some((r) => r.name === name)) { iName.focus(); return; }
+        a.roles.push({ name: name, label: iLabel.value.trim() });
+        markDirty();
+        renderRoles();
+        close();
+      });
+      setTimeout(() => iName.focus(), 30);
+    });
+  });
+  rolesGrid.appendChild(addRoleBtn);
+
   if (!a.login.rate_limit) a.login.rate_limit = {};
   h3(root, "Login rate limit");
   const card2 = cardEl(root);
@@ -1659,6 +2015,7 @@ const ACTION_SCHEMA = [
   { key: "script", label: "Script (Lua)", type: "lua" },
   { key: "bulk", label: "Bulk", type: "bool" },
   { key: "requires_confirmation", label: "Confirm", type: "bool" },
+  { key: "policy", label: "Policy", type: "roleSelect" },
 ];
 
 const CHILD_SCHEMA = [
@@ -1668,7 +2025,7 @@ const CHILD_SCHEMA = [
 ];
 
 /* Action row layout: fields + type toggle on row 1, full-width query/script on row 2, buttons on row 3. */
-const ACTION_FIELDS = ["name", "label", "bulk", "requires_confirmation"];
+const ACTION_FIELDS = ["name", "label", "bulk", "requires_confirmation", "policy"];
 const ACTION_SCHEMA_MAP = Object.fromEntries(ACTION_SCHEMA.map(s => [s.key, s]));
 
 function actionRenderRow(resourceName) {
@@ -1700,6 +2057,34 @@ function actionRenderRow(resourceName) {
         lbl.className = "action-field-label";
         lbl.textContent = s.label;
         field.append(lbl);
+      } else if (s.type === "roleSelect") {
+        const roles = (state.config.auth.roles || []).map((r) => r.name);
+        const lbl = document.createElement("label");
+        lbl.textContent = s.label;
+        const el = document.createElement("select");
+        el.multiple = true;
+        el.size = Math.min(roles.length, 3);
+        const current = (item[key] || "").split("|").map((r) => r.trim()).filter(Boolean);
+        for (const role of roles) {
+          const o = document.createElement("option");
+          o.value = role;
+          o.textContent = role;
+          if (current.includes(role)) o.selected = true;
+          el.appendChild(o);
+        }
+        if (roles.length === 0) {
+          const o = document.createElement("option");
+          o.value = "";
+          o.textContent = "(no roles defined)";
+          o.disabled = true;
+          el.appendChild(o);
+        }
+        el.addEventListener("change", () => {
+          const vals = Array.from(el.selectedOptions).map((o) => o.value);
+          item[key] = vals.length ? vals.join("|") : "";
+          onChange();
+        });
+        field.append(lbl, el);
       } else {
         const lbl = document.createElement("label");
         lbl.textContent = s.label;
@@ -2034,11 +2419,12 @@ function renderResourceSettings(root, r, readOnly) {
   h3(root, "Policies");
   const cardP = cardEl(root);
   const gP = gridWrap(cardP);
-  textField(gP, "view_any", r.policies, "view_any", readOnly);
-  textField(gP, "view", r.policies, "view", readOnly);
-  textField(gP, "create", r.policies, "create", readOnly);
-  textField(gP, "update", r.policies, "update", readOnly);
-  textField(gP, "delete", r.policies, "delete", readOnly);
+  const roles = (state.config.auth.roles || []).map((r) => r.name);
+  policyField(gP, "view_any", r.policies, "view_any", roles, readOnly);
+  policyField(gP, "view", r.policies, "view", roles, readOnly);
+  policyField(gP, "create", r.policies, "create", roles, readOnly);
+  policyField(gP, "update", r.policies, "update", roles, readOnly);
+  policyField(gP, "delete", r.policies, "delete", roles, readOnly);
 
   /* Children */
   if (!Array.isArray(r.children)) r.children = [];

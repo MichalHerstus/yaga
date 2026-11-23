@@ -120,21 +120,31 @@ type SQLCConfig struct {
 // AuthConfig configures authentication: the guard/provider, the auth table,
 // login behavior and optional registration/password-reset/remember-me flags.
 type AuthConfig struct {
-	Guard         string      `yaml:"guard"`
-	Provider      string      `yaml:"provider"`
-	Table         string      `yaml:"table"`
-	Login         LoginConfig `yaml:"login"`
-	Registration  bool        `yaml:"registration"`
-	PasswordReset bool        `yaml:"password_reset"`
-	RememberMe    bool        `yaml:"remember_me"`
+	Guard         string       `yaml:"guard"`
+	Provider      string       `yaml:"provider"`
+	Table         string       `yaml:"table"`
+	Login         LoginConfig  `yaml:"login"`
+	Roles         []RoleConfig `yaml:"roles"` // known roles; used for RBAC policies and demo-user seeding
+	Registration  bool         `yaml:"registration"`
+	PasswordReset bool         `yaml:"password_reset"`
+	RememberMe    bool         `yaml:"remember_me"`
 }
 
 // LoginConfig declares the login field names (e.g. [email, password]), the
-// redirect target after a successful login, and optional per-IP rate limiting.
+// redirect target after a successful login, optional per-role redirect targets
+// (role name -> path) that override the fallback, and optional per-IP rate limiting.
 type LoginConfig struct {
-	Fields    []string        `yaml:"fields"`
-	Redirect  string          `yaml:"redirect"`
-	RateLimit *LoginRateLimit `yaml:"rate_limit"`
+	Fields    []string          `yaml:"fields"`
+	Redirect  string            `yaml:"redirect"`
+	Redirects map[string]string `yaml:"redirects"`
+	RateLimit *LoginRateLimit   `yaml:"rate_limit"`
+}
+
+// RoleConfig declares a role known to the dashboard. Roles are used both for
+// RBAC policy checks and for seeding demo users in the SQLite system DB.
+type RoleConfig struct {
+	Name  string `yaml:"name"`  // machine name, e.g. "admin" (used in redirects, policies, emails)
+	Label string `yaml:"label"` // optional human-readable name, e.g. "Administrator"
 }
 
 // LoginRateLimit throttles login attempts per client IP. When the block is

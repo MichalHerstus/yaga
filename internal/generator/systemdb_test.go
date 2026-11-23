@@ -7,7 +7,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/MichalHerstus/yaga/internal/authbootstrap"
 	"github.com/MichalHerstus/yaga/internal/types"
 	"golang.org/x/crypto/bcrypt"
 	_ "modernc.org/sqlite"
@@ -41,21 +40,23 @@ func readSystemDB(t *testing.T, dir string) *sql.DB {
 }
 
 // TestGenerateSystemDB verifies the local SQLite auth database is created and
-// seeded with the default roles and an admin whose password is a valid bcrypt
-// hash of the one printed by generate.
+// seeded with the default roles and demo users, one per role, whose passwords
+// are valid bcrypt hashes of the ones printed by generate.
 func TestGenerateSystemDB(t *testing.T) {
 	dir := t.TempDir()
 	g := New(systemDBConfig(), dir)
+	g.AdminPassword = "demo-password"
+	g.AdminPasswordSet = true
 	if err := g.Generate(); err != nil {
 		t.Fatalf("generate: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(dir, systemDBFilename)); err != nil {
 		t.Fatalf("system.db missing: %v", err)
 	}
-	if len(g.BootstrapLines) == 0 || !strings.Contains(strings.Join(g.BootstrapLines, "\n"), authbootstrap.AdminEmail) {
-		t.Fatalf("bootstrap lines should surface the admin login: %v", g.BootstrapLines)
+	if len(g.BootstrapLines) == 0 || !strings.Contains(strings.Join(g.BootstrapLines, "\n"), "Demo login: admin@demo.test") {
+		t.Fatalf("bootstrap lines should surface demo logins: %v", g.BootstrapLines)
 	}
-	password := strings.TrimSpace(strings.Split(g.BootstrapLines[len(g.BootstrapLines)-1], "/")[1])
+	password := "demo-password"
 
 	db := readSystemDB(t, dir)
 	var count int
@@ -71,16 +72,19 @@ func TestGenerateSystemDB(t *testing.T) {
 		}
 	}
 
-	var email, hash, roleName string
-	if err := db.QueryRow(`SELECT "email", "password", role_name FROM "users" WHERE "email" = ?`, authbootstrap.AdminEmail).
-		Scan(&email, &hash, &roleName); err != nil {
-		t.Fatalf("read admin: %v", err)
-	}
-	if email != authbootstrap.AdminEmail || roleName != "admin" {
-		t.Errorf("admin row = %q / %q", email, roleName)
-	}
-	if err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)); err != nil {
-		t.Errorf("admin password hash does not match the printed password: %v", err)
+	// Each role gets a demo user {role}@demo.test with the printed password.
+	for _, role := range []string{"admin", "manager", "user"} {
+		email := role + "@demo.test"
+		var hash, roleName string
+		if err := db.QueryRow(`SELECT "password", role_name FROM "users" WHERE "email" = ?`, email).Scan(&hash, &roleName); err != nil {
+			t.Fatalf("read %s: %v", email, err)
+		}
+		if roleName != role {
+			t.Errorf("%s role_name = %q, want %q", email, roleName, role)
+		}
+		if err := bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)); err != nil {
+			t.Errorf("%s password hash does not match the printed password: %v", email, err)
+		}
 	}
 }
 
@@ -100,7 +104,7 @@ func TestGenerateSystemDBCustomAuthFields(t *testing.T) {
 	}
 	db := readSystemDB(t, dir)
 	var hash string
-	if err := db.QueryRow(`SELECT "secret" FROM "Accounts" WHERE "login" = ?`, authbootstrap.AdminEmail).Scan(&hash); err != nil {
+	if err := db.QueryRow(`SELECT "secret" FROM "Accounts" WHERE "login" = ?`, "admin@demo.test").Scan(&hash); err != nil {
 		t.Fatalf("custom auth table/fields not seeded: %v", err)
 	}
 	if len(hash) < 10 {
@@ -163,7 +167,7 @@ func adminHash(t *testing.T, dir string) string {
 	t.Helper()
 	db := readSystemDB(t, dir)
 	var hash string
-	if err := db.QueryRow(`SELECT "password" FROM "users" WHERE "email" = ?`, authbootstrap.AdminEmail).Scan(&hash); err != nil {
+	if err := db.QueryRow(`SELECT "password" FROM "users" WHERE "email" = ?`, "admin@demo.test").Scan(&hash); err != nil {
 		t.Fatalf("read admin hash: %v", err)
 	}
 	return hash

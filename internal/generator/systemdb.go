@@ -36,9 +36,9 @@ func (g *Generator) systemDBInfo() (table, identity, password string) {
 }
 
 // generateSystemDB creates <OutDir>/system.db if missing and makes sure the
-// roles table and the bootstrap admin account are seeded. An existing file is
+// roles table and the bootstrap demo accounts are seeded. An existing file is
 // never replaced or deleted, so regenerating a dashboard (even with --force)
-// preserves its users. The effective admin password is printed when a row was
+// preserves its users. Demo user credentials are printed when a row was
 // inserted or reset. Returns the console lines to show the operator.
 func (g *Generator) generateSystemDB() ([]string, error) {
 	path := filepath.Join(g.OutDir, systemDBFilename)
@@ -62,8 +62,15 @@ func (g *Generator) generateSystemDB() ([]string, error) {
 	)); err != nil {
 		return nil, fmt.Errorf("creating roles table: %w", err)
 	}
-	if _, err := db.Exec("INSERT OR IGNORE INTO roles (name) VALUES ('admin'), ('manager'), ('user')"); err != nil {
-		return nil, fmt.Errorf("seeding roles: %w", err)
+
+	// Roles come from auth.roles; fall back to the built-in defaults when the
+	// block is absent. Every configured role is seeded into the roles table.
+	roles := g.authRoles()
+	for i, role := range roles {
+		if _, err := db.Exec("INSERT OR IGNORE INTO roles (name) VALUES (?)", role); err != nil {
+			return nil, fmt.Errorf("seeding role %q: %w", role, err)
+		}
+		_ = i
 	}
 
 	columns := fmt.Sprintf(
@@ -74,13 +81,37 @@ func (g *Generator) generateSystemDB() ([]string, error) {
 		return nil, fmt.Errorf("creating auth table: %w", err)
 	}
 
+	// One demo user per role: {role}@demo.test. When --admin-password is set it
+	// applies to all demo users; otherwise each gets a random password.
 	password := g.AdminPassword
-	if password == "" {
-		password = authbootstrap.RandomPassword()
+	var demoSeeded [][2]string
+	for _, role := range roles {
+		pw := password
+		if pw == "" {
+			pw = authbootstrap.RandomPassword()
+		}
+		seeded, err := authbootstrap.SeedUsers(db, "sqlite", table, identity, passwordField, []string{role}, pw, g.AdminPasswordSet)
+		if err != nil {
+			return nil, fmt.Errorf("seeding demo user for role %q: %w", role, err)
+		}
+		demoSeeded = append(demoSeeded, seeded...)
 	}
-	inserted, updated, err := authbootstrap.EnsureAdmin(db, "sqlite", table, identity, passwordField, password, g.AdminPasswordSet)
-	if err != nil {
-		return nil, fmt.Errorf("seeding admin user: %w", err)
+	return authbootstrap.MessageMulti(created, demoSeeded), nil
+}
+
+// authRoles returns the configured role names from auth.roles, or the built-in
+// defaults (admin, manager, user) when the block is absent.
+func (g *Generator) authRoles() []string {
+	if len(g.Config.Auth.Roles) > 0 {
+		names := make([]string, 0, len(g.Config.Auth.Roles))
+		for _, r := range g.Config.Auth.Roles {
+			if r.Name != "" {
+				names = append(names, r.Name)
+			}
+		}
+		if len(names) > 0 {
+			return names
+		}
 	}
-	return authbootstrap.Message(created, inserted, updated, password), nil
+	return []string{"admin", "manager", "user"}
 }

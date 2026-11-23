@@ -93,20 +93,23 @@ DATABASE_URL="sqlserver://user:pass@localhost:1433?database=mydb" ./admin   # MS
 
 Poznámky:
 
-- DSN jsou **nikdy** nekompilovány do binárního souboru dashboardu — tajemství zůstávají
-  mimo artefakt. Zdrojový `yaga.yaml` stále obsahuje plaintextový `dsn:` v `connections:`
-  (řídí generování), proto považujte `yaga.yaml` za citlivý soubor.
-- `system.db` vytváří **`yaga generate`** ve složce vygenerované aplikace. Obsahuje pouze
+* DSN nejsou **nikdy** kompilovány do binárního souboru dashboardu — citlivé informacezůstávají
+  mimo aplikaci. Zdrojový `{file}.yaml` ale obsahuje plaintextový `dsn:` v `connections:`
+  (řídí generování), proto považujte `yaml` za citlivý soubor.
+
+* `system.db` vytváří **`yaga generate`** ve složce vygenerované aplikace. Obsahuje pouze
   tabulku `roles` a uživatelskou tabulku pojmenovanou podle `auth.table` (výchozí `users`;
   identita a heslo z `auth.login.fields`). Při regeneraci se nikdy nesmaže ani nenahradí,
   ani s `--force`. Spusťte binární soubor ze složky obsahující `system.db` (nebo nastavte
   `AUTH_DB_DSN` jinam).
-- **`yaga generate` přepisuje `.ENV`** z konfigurace při každém spuštění (včetně
+
+* **`yaga generate`** **přepisuje** **`.ENV`** z konfigurace při každém spuštění (včetně
   `AUTH_DB_DSN=system.db`). Pro prostředí nasazení upravte `.ENV` (nebo nastavte proměnné
   prostředí) *po* generování / balení — `make package` zahrnuje `.ENV` a `system.db` do
   release archivu.
-- Vygenerovaný server kontroluje **obě** databáze **před navázáním portu**, takže
-  chybějící/inicializovaná databáze je fatální chyba při spuštění místo obsazeného portu.
+
+* Vygenerovaný server kontroluje **obě** databáze **před navázáním portu**, takže
+  chybějící/inicializovaná databáze je primární fatální chyba, před chybou spuštění na obsazeném portu.
 
 ---
 
@@ -114,25 +117,25 @@ Poznámky:
 
 ```
 yaga init --db DSN  Introspektuje existující databázi a vygeneruje yaga.yaml
-yaga edit           Interaktivní editor YAML konfigurace (TUI)
-yaga wedit          Webový editor YAML konfigurace (prohlížeč, lokální HTTP server)
-yaga generate       Vygeneruje Go aplikaci admin panelu (offline, bez sqlc)
-yaga validate       Ověří YAML konfiguraci
-yaga version        Vypíše informace o verzi
+yaga edit           Interaktivní editor YAML konfigurace (TUI)…zastaven vývoj, není dále rozvíjen!
+yaga wedit          Webový editor YAML konfigurace (prohlížeč, lokální HTTP server) <—primární editor pro úpravy YAML
+yaga generate       Vygeneruje Go aplikaci admin panelu (offline)
+yaga validate       Ověří správnost YAML konfigurace
+yaga version        Vypíše informace o verzi YAGA
 ```
 
 ### Globální přepínače (použitelné s většinou příkazů)
 
-| Přepínač | Zkratka | Výchozí | Význam |
-|---|---|---|---|
-| `--config` | `-c` | `yaga.yaml` | Cesta k YAML konfiguračnímu souboru |
-| `--out` | `-o` | `./admin` | Výstupní adresář pro generovaný kód |
-| `--db` | `-d` | — | Připojovací řetězec DB pro `init` (`postgres://…`, `sqlserver://…`, `mssql://…` nebo cesta k sqlite souboru) |
-| `--admin-password` | `-p` | náhodné | Heslo administrátora pro `generate` (vytvoří/resetuje admina v `system.db`); `init` ho ignoruje |
-| `--force` | `-f` | false | Přepsat existující soubory |
-| `--verbose` | `-v` | false | Podrobný logování |
-| `--skip-plugins` | `-s` | false | Přeskočit načítání deklarovaných pluginů (pro `generate`) |
-| `--update` | — | false | Sloučit nové tabulky do existující konfigurace místo přepisu (`init`) |
+| Přepínač           | Zkratka | Výchozí     | Význam                                                                                                       |
+| ------------------ | ------- | ----------- | ------------------------------------------------------------------------------------------------------------ |
+| `--config`         | `-c`    | `yaga.yaml` | Cesta k YAML konfiguračnímu souboru                                                                          |
+| `--out`            | `-o`    | `./admin`   | Výstupní adresář pro generovaný kód                                                                          |
+| `--db`             | `-d`    | —           | Připojovací řetězec DB pro `init` (`postgres://…`, `sqlserver://…`, `mssql://…` nebo cesta k sqlite souboru) |
+| `--admin-password` | `-p`    | náhodné     | Heslo administrátora pro `generate` (vytvoří/resetuje admina v `system.db`); `init` ho ignoruje              |
+| `--force`          | `-f`    | false       | Přepíše existující soubory                                                                                   |
+| `--verbose`        | `-v`    | false       | Podrobné logování                                                                                            |
+| `--skip-plugins`   | `-s`    | false       | Přeskočit načítání deklarovaných pluginů (pro `generate`)                                                    |
+| `--update`         | —       | false       | Sloučit nové tabulky do existující konfigurace místo přepisu (`init`)                                        |
 
 ### `yaga init`
 
@@ -220,9 +223,9 @@ Věci, které při návrhu záleží:
 ### 3.2 `init --db` — kostra z databáze
 
 ```sh
-yaga init --db "postgres://user:pass@localhost:5432/mydb?sslmode=disable"
-yaga init --db "./mydata.db"                                            # SQLite
-yaga init --db "sqlserver://user:pass@localhost:1433?database=mydb"     # MSSQL
+yaga init --db "postgres://user:pass@localhost:5432/mydb?sslmode=disable."  # Postgres
+yaga init --db "./mydata.db"                                        # SQLite
+yaga init --db "sqlserver://user:pass@localhost:1433?database=mydb"        # MSSQL
 ```
 
 Co se stane:
