@@ -449,9 +449,9 @@ func (s *Server) handleSchemaBrowser(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]interface{}{"tables": tables})
 }
 
-// handleSchemaSample returns up to `limit` rows from the in-memory stub for
-// the given table. When a live --db DSN is configured, it queries the live
-// database directly instead (fresh data, no seeding required).
+// handleSchemaSample returns up to `limit` rows from the live database when a
+// connection is configured (--db flag or the config's connections: block) and
+// falls back to the in-memory stub otherwise.
 func (s *Server) handleSchemaSample(w http.ResponseWriter, r *http.Request) {
 	table := r.PathValue("table")
 	if table == "" {
@@ -467,17 +467,21 @@ func (s *Server) handleSchemaSample(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// When a live database is configured, query it directly.
-	if s.liveDSN != "" {
-		rows, err := queryLiveSample(s.liveDriver, s.liveDSN, table, limit)
+	if dsn, driver := s.liveConnection(); dsn != "" {
+		rows, err := queryLiveSample(driver, dsn, table, limit)
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 			return
 		}
+		if rows == nil {
+			rows = []map[string]interface{}{}
+		}
 		writeJSON(w, http.StatusOK, map[string]interface{}{
-			"table": table,
-			"limit": limit,
-			"rows":  rows,
-			"count": len(rows),
+			"table":  table,
+			"limit":  limit,
+			"rows":   rows,
+			"count":  len(rows),
+			"source": "live",
 		})
 		return
 	}
@@ -496,10 +500,11 @@ func (s *Server) handleSchemaSample(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"table": table,
-		"limit": limit,
-		"rows":  result.Rows,
-		"count": len(result.Rows),
+		"table":  table,
+		"limit":  limit,
+		"rows":   result.Rows,
+		"count":  len(result.Rows),
+		"source": "stub",
 	})
 }
 
@@ -563,25 +568,13 @@ func queryLiveSample(driver, dsn, table string, limit int) ([]map[string]interfa
 }
 
 // handleSampleRefresh seeds the in-memory stub with up to 100 rows per schema
-// table from the first configured live database connection.
+// table from the live database (--db flag, else the config's first connection).
 func (s *Server) handleSampleRefresh(w http.ResponseWriter, r *http.Request) {
 	s.mu.RLock()
 	cfg := s.cfg
 	s.mu.RUnlock()
 
-	dsn := ""
-	driver := ""
-	for _, conn := range cfg.Connections {
-		dsn = conn.DSN
-		driver = conn.Driver
-		if dsn == "" {
-			dsn = os.Getenv("DATABASE_URL")
-		}
-		break
-	}
-	if driver == "" {
-		driver = "pgx"
-	}
+	dsn, driver := s.liveConnection()
 
 	// Close existing stub if any.
 	if s.stubDB != nil {
@@ -612,8 +605,8 @@ func (s *Server) handleSampleRefresh(w http.ResponseWriter, r *http.Request) {
 	}
 	s.stubDB = stub
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"ok":       true,
+		"ok":        true,
 		"row_count": rowCount,
-		"tables":   len(cfg.Schema.Tables),
+		"tables":    len(cfg.Schema.Tables),
 	})
 }

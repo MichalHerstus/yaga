@@ -119,7 +119,8 @@ WEdit (wedit only):
   --open         Open the editor in the default browser after binding
   --db, -d DSN   Live database connection for the Schema browser's
                  "Show data" action (postgres://..., sqlserver://...
-                 or sqlite file path)`)
+                 or sqlite file path; defaults to the first connections:
+                 entry in the YAML, then DATABASE_URL / .ENV)`)
 }
 
 // subcommands. Flags that take a value (--config/-c, --out/-o, --db/-d,

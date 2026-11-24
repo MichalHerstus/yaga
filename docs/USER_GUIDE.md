@@ -179,6 +179,7 @@ Navigation and pages are never auto-modified.
 |---|---|
 | `--port N` | Web editor listen port (default `9090`) |
 | `--open` | Open the editor in the default browser after binding |
+| `--db DSN` | Live database used by the Schema browser's **Show data** action (defaults to the first `connections:` entry in the config, then `DATABASE_URL` / `.ENV`) |
 
 ### `yaga validate`
 
@@ -644,6 +645,21 @@ yaga wedit --port 9091 --open    # custom port / open the browser
 A local HTTP server with an embedded single-page app:
 
 - Tab editors for panel, connections, auth, navigation, resources, pages;
+- a **Schema** browser listing the captured `schema:` tables, with **View** (columns +
+  foreign keys) and **Show data** (top N rows) — data comes from the live database
+  configured under `connections:` (or `--db`), falling back to the in-memory stub only
+  when no connection is configured;
+- every dataview editor has a **Show data** tab that previews rows from that dataview's
+  table (`table:` override, else `<name>s`), with a configurable row limit (prefilled
+  from the list `per_page`);
+- in the List/Form tabs, column and field **Name** cells are dropdown-editable: they
+  suggest the columns of the dataview's table from the captured `schema:` block (List also
+  suggests derived `<fk>_label` names) while still accepting free text for aliases;
+- in the Settings tab, `Table` is read-only (set during `yaga init --db`) and `ID column`
+  is a dropdown offering only primary-key columns from the schema block; `ID type` is not
+  shown;
+- opening **Raw YAML** while a dataview is open scrolls the YAML textarea directly to that
+  dataview's `- name:` entry under `resources:`.
 - a **Validate** screen running the full validator (+ auto-fix) live;
 - a **Preview** tab rendering a mock dashboard and per-resource list views (page/resource
   mocks, light/dark theme);

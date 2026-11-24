@@ -14,6 +14,7 @@ const state = {
   pageName: null, // drill-in: page being edited
   dirty: false,
   rawDirty: false, // raw-tab textarea has unsaved typing
+  rawScrollTarget: null, // resource name to scroll to when opening Raw YAML
   resourceSearch: "", // filter text for the resources table
   schemaSearch: "", // filter text for the schema browser
   rev: 0, // last-known server config revision
@@ -412,6 +413,44 @@ function textField(grid, label, obj, key, readOnly) {
   }
   wrap.appendChild(i);
   return i;
+}
+
+// selectField renders a string field as a dropdown over `options` plus an empty
+// "—" entry that clears the key (letting the generator's default apply). A
+// current value missing from the options is kept as an extra entry so
+// hand-written values are never silently dropped.
+function selectField(grid, label, obj, key, options, readOnly, onChange) {
+  const wrap = fieldEl(grid, label);
+  const s = document.createElement("select");
+  const blank = document.createElement("option");
+  blank.value = "";
+  blank.textContent = "—";
+  s.appendChild(blank);
+
+  const current = obj[key] != null ? String(obj[key]) : "";
+  const opts = [...options];
+  if (current && !opts.includes(current)) opts.unshift(current);
+  for (const o of opts) {
+    const opt = document.createElement("option");
+    opt.value = o;
+    opt.textContent = o;
+    s.appendChild(opt);
+  }
+  s.value = current;
+
+  if (readOnly) {
+    s.disabled = true;
+    s.classList.add("readonly");
+  } else {
+    s.addEventListener("change", () => {
+      if (s.value === "") delete obj[key];
+      else obj[key] = s.value;
+      markDirty();
+      if (onChange) onChange();
+    });
+  }
+  wrap.appendChild(s);
+  return s;
 }
 
 // policyField renders a pipe-separated RBAC policy as a multi-select of
@@ -973,6 +1012,9 @@ function luaTextArea(value, onChange) {
   return wrap;
 }
 
+// datalistSeq keeps every combobox datalist id unique within the page.
+let datalistSeq = 0;
+
 function collectionEditor(container, items, schema, opts = {}) {
   const wrap = document.createElement("div");
   wrap.className = "table-wrap";
@@ -1027,6 +1069,36 @@ function collectionEditor(container, items, schema, opts = {}) {
         });
       }
       return el;
+    }
+    if (s.type === "combo") {
+      // Free-text input with a datalist dropdown of schema column names.
+      const wrap = document.createElement("span");
+      wrap.className = "combo-cell";
+      const el = document.createElement("input");
+      el.type = "text";
+      el.value = item[s.key] != null ? item[s.key] : "";
+      const listId = "dl-" + s.key + "-" + (++datalistSeq);
+      el.setAttribute("list", listId);
+      const dl = document.createElement("datalist");
+      dl.id = listId;
+      for (const o of s.options || []) {
+        const opt = document.createElement("option");
+        opt.value = o;
+        dl.appendChild(opt);
+      }
+      if (readOnly) {
+        el.readOnly = true;
+        el.classList.add("readonly");
+      } else {
+        el.addEventListener("change", () => {
+          const v = el.value.trim();
+          if (v === "") delete item[s.key];
+          else item[s.key] = v;
+          onChange();
+        });
+      }
+      wrap.append(el, dl);
+      return wrap;
     }
     const el = document.createElement("input");
     el.type = s.type === "number" ? "number" : "text";
@@ -1236,6 +1308,10 @@ function syncTopbar() {
 }
 
 function switchPage(id) {
+  // Remember which dataview we came from so Raw YAML can scroll to it.
+  if (id === "raw" && state.resource) {
+    state.rawScrollTarget = state.resource;
+  }
   state.page = id;
   state.resource = null;
   state.pageName = null;
@@ -2001,6 +2077,52 @@ const FORM_FIELD_SCHEMA = [
   { key: "options_query", label: "Options query" },
 ];
 
+// schemaColumnsFor returns the column-name suggestions for a dataview's table,
+// read from the captured `schema:` block. `includeLabelAliases` adds the
+// "{fk}_label" names the generator derives for LEFT JOINed label columns (list
+// / card / detail views), so those stay selectable too. A missing schema block
+// or unknown table yields no suggestions (the field stays free text).
+function schemaColumnsFor(r, includeLabelAliases) {
+  const schema = state.config && state.config.schema;
+  if (!schema || !Array.isArray(schema.tables)) return [];
+  const want = resourceTableName(r);
+  let t = schema.tables.find((x) => x.name === want);
+  if (!t) t = schema.tables.find((x) => String(x.name || "").toLowerCase() === String(want).toLowerCase());
+  if (!t) return [];
+  const names = (t.columns || []).map((c) => c.name).filter(Boolean);
+  if (includeLabelAliases) {
+    for (const fk of t.foreign_keys || []) {
+      if (fk && fk.column) names.push(fk.column + "_label");
+    }
+  }
+  return names;
+}
+
+// schemaPkColumnsFor returns the names of primary-key columns of the dataview's
+// table from the captured schema block, so the Settings "ID column" dropdown only
+// offers real key candidates. Empty when there is no schema block/table or no PK.
+function schemaPkColumnsFor(r) {
+  const schema = state.config && state.config.schema;
+  if (!schema || !Array.isArray(schema.tables)) return [];
+  const want = resourceTableName(r);
+  let t = schema.tables.find((x) => x.name === want);
+  if (!t) t = schema.tables.find((x) => String(x.name || "").toLowerCase() === String(want).toLowerCase());
+  if (!t) return [];
+  return (t.columns || [])
+    .filter((c) => c && c.primary_key)
+    .map((c) => c.name)
+    .filter(Boolean);
+}
+
+// withColumnChoices returns a copy of a collection schema whose `name` column
+// becomes a combobox (datalist) offering `choices`. The value
+// stays freely editable so derived aliases, computed names and SQL aliases can
+// still be typed when they are not in the schema block.
+function withColumnChoices(base, choices) {
+  if (!choices || choices.length === 0) return base;
+  return base.map((s) => (s.key === "name" ? { ...s, type: "combo", options: choices } : s));
+}
+
 const COMPUTED_SCHEMA = [
   { key: "name", label: "Name" },
   { key: "label", label: "Label" },
@@ -2283,7 +2405,7 @@ function renderResourceList() {
       const tdLabel = document.createElement("td");
       tdLabel.textContent = r.label || "";
       const tdTable = document.createElement("td");
-      tdTable.textContent = r.table || r.name;
+      tdTable.textContent = resourceTableName(r);
       const tdId = document.createElement("td");
       tdId.textContent = r.id_column || "id";
       const tdAct = document.createElement("td");
@@ -2346,6 +2468,7 @@ function renderResourceEditor(name) {
   const c = state.config;
   const r = c.resources.find((x) => x.name === name);
   if (!r) { renderResourceList(); return; }
+  state.resource = name;
   const root = content();
 
   const readOnly = !state.resourceEditMode;
@@ -2372,6 +2495,7 @@ function renderResourceEditor(name) {
     { id: "list", label: "List" },
     { id: "form", label: "Form" },
     { id: "actions", label: "Actions" },
+    { id: "data", label: "Show data" },
   ];
   for (const tb of tabs) {
     const b = mkButton(tb.label, () => {
@@ -2391,13 +2515,46 @@ function renderResourceEditor(name) {
   else if (tab === "list") renderResourceListTab(body, r, readOnly);
   else if (tab === "form") renderResourceFormTab(body, r, readOnly);
   else if (tab === "actions") renderResourceActionsTab(body, r, readOnly);
+  else if (tab === "data") renderResourceDataTab(body, r);
 
   if (readOnly) {
     root.querySelectorAll("input, select, textarea, button").forEach((el) => {
       if (el.classList.contains("nav-back") || el.classList.contains("resource-tab")) return;
+      if (el.closest(".data-browser")) return; // data browsing stays usable in view mode
       el.disabled = true;
     });
   }
+}
+
+/* ---------- sub-tab: Show data (rows from the dataview's table) ---------- */
+
+// resourceTableName mirrors the generator's tableName(): the explicit `table:`
+// override, else "<lowercase name>s".
+function resourceTableName(r) {
+  if (r.table) return r.table;
+  return String(r.name || "").toLowerCase() + "s";
+}
+
+function renderResourceDataTab(root, r) {
+  const tableName = resourceTableName(r);
+  const head = document.createElement("div");
+  head.className = "toolbar";
+  const it = document.createElement("h3");
+  it.className = "sub-heading";
+  it.textContent = "Data: " + tableName;
+  head.appendChild(it);
+  root.appendChild(head);
+
+  const note = document.createElement("p");
+  note.className = "mono";
+  note.textContent = "Rows from the dataview's table (live database when a connection is configured).";
+  root.appendChild(note);
+
+  const wrap = document.createElement("div");
+  root.appendChild(wrap);
+
+  const perPage = r.list && r.list.per_page ? r.list.per_page : 10;
+  dataBrowser(wrap, tableName, perPage);
 }
 
 /* ---------- sub-tab: Settings (identity + policies + children) ---------- */
@@ -2405,13 +2562,13 @@ function renderResourceEditor(name) {
 function renderResourceSettings(root, r, readOnly) {
   const card = cardEl(root);
   const g = gridWrap(card);
+  const pkNames = schemaPkColumnsFor(r);
   textField(g, "Name", r, "name", readOnly);
   textField(g, "Label", r, "label", readOnly);
   iconSelectField(g, "Icon", r, "icon", readOnly);
   textField(g, "Group", r, "group", readOnly);
-  textField(g, "Table", r, "table", readOnly);
-  textField(g, "ID type", r, "id_type", readOnly);
-  textField(g, "ID column", r, "id_column", readOnly);
+  textField(g, "Table", r, "table", true);
+  selectField(g, "ID column", r, "id_column", pkNames, readOnly);
   boolField(g, "Import CSV", r, "import_csv", readOnly);
 
   /* Policies */
@@ -2448,6 +2605,7 @@ function renderResourceSettings(root, r, readOnly) {
 /* ---------- sub-tab: List (list + card + detail) ---------- */
 
 function renderResourceListTab(root, r, readOnly) {
+  const columnSchema = withColumnChoices(COLUMN_SCHEMA, schemaColumnsFor(r, true));
   /* List */
   if (!r.list) r.list = {};
   h3(root, "List");
@@ -2471,7 +2629,7 @@ function renderResourceListTab(root, r, readOnly) {
     lCols.appendChild(addCol);
   }
   cardL.appendChild(lCols);
-  collectionEditor(cardL, r.list.columns, COLUMN_SCHEMA, { jsonTitle: "Edit column (JSON)", readOnly });
+  collectionEditor(cardL, r.list.columns, columnSchema, { jsonTitle: "Edit column (JSON)", readOnly });
 
   if (!r.list.computed) r.list.computed = [];
   const lComp = document.createElement("div");
@@ -2509,7 +2667,7 @@ function renderResourceListTab(root, r, readOnly) {
     cCols.appendChild(addCardCol);
   }
   cardC.appendChild(cCols);
-  collectionEditor(cardC, r.card.fields, COLUMN_SCHEMA, { jsonTitle: "Edit card field (JSON)", readOnly });
+  collectionEditor(cardC, r.card.fields, columnSchema, { jsonTitle: "Edit card field (JSON)", readOnly });
 
   if (!r.card.computed) r.card.computed = [];
   const cComp = document.createElement("div");
@@ -2545,7 +2703,7 @@ function renderResourceListTab(root, r, readOnly) {
     dCols.appendChild(addDCol);
   }
   cardD.appendChild(dCols);
-  collectionEditor(cardD, r.detail.fields, COLUMN_SCHEMA, { jsonTitle: "Edit detail field (JSON)", readOnly });
+  collectionEditor(cardD, r.detail.fields, columnSchema, { jsonTitle: "Edit detail field (JSON)", readOnly });
 
   if (!r.detail.computed) r.detail.computed = [];
   const dComp = document.createElement("div");
@@ -2567,6 +2725,7 @@ function renderResourceListTab(root, r, readOnly) {
 
 function renderResourceFormTab(root, r, readOnly) {
   if (!r.form) r.form = {};
+  const formSchema = withColumnChoices(FORM_FIELD_SCHEMA, schemaColumnsFor(r, false));
   for (const [key, label] of [["create", "Form / Create"], ["update", "Form / Update"], ["delete", "Form / Delete"]]) {
     if (!r.form[key]) r.form[key] = {};
     h3(root, label);
@@ -2587,7 +2746,7 @@ function renderResourceFormTab(root, r, readOnly) {
       fCols.appendChild(addFCol);
     }
     cardF.appendChild(fCols);
-    collectionEditor(cardF, r.form[key].fields, FORM_FIELD_SCHEMA, { jsonTitle: "Edit field (JSON)", readOnly });
+    collectionEditor(cardF, r.form[key].fields, formSchema, { jsonTitle: "Edit field (JSON)", readOnly });
   }
 }
 
@@ -2729,12 +2888,23 @@ async function pageSchema() {
 
 async function loadSchemaData(tableName) {
   const root = content();
-  // Keep the page context but show a loading state in a modal-like area.
-  // We render a dedicated data view replacing current content.
   h2(root, "Data: " + tableName);
   const back = btn("← Schema", "small");
   back.addEventListener("click", () => { pageSchema(); });
   root.appendChild(back);
+
+  const wrap = document.createElement("div");
+  root.appendChild(wrap);
+  dataBrowser(wrap, tableName, 10);
+}
+
+/* Shared live-data browser: a row-limit input, a Load button and the result
+   table. Used by the Schema browser's "Show data" action and the dataview
+   editor's "Show data" tab. The server answers from the live database when a
+   connection is configured (--db flag or connections: in yaga.yaml) and from
+   the in-memory stub otherwise; data.source says which. */
+async function dataBrowser(container, tableName, initialLimit) {
+  container.classList.add("data-browser");
 
   const limitBar = document.createElement("div");
   limitBar.className = "toolbar";
@@ -2742,16 +2912,16 @@ async function loadSchemaData(tableName) {
   li.type = "number";
   li.min = "1";
   li.max = "1000";
-  li.value = "10";
+  li.value = String(initialLimit || 10);
   li.style.width = "80px";
   const loadBtn = btn("Load", "small");
   limitBar.appendChild(li);
   limitBar.appendChild(document.createTextNode(" rows"));
   limitBar.appendChild(loadBtn);
-  root.appendChild(limitBar);
+  container.appendChild(limitBar);
 
   const dataContainer = document.createElement("div");
-  root.appendChild(dataContainer);
+  container.appendChild(dataContainer);
 
   async function doLoad() {
     const n = parseInt(li.value, 10) || 10;
@@ -2776,20 +2946,25 @@ async function loadSchemaData(tableName) {
     dataContainer.innerHTML = "";
     const info = document.createElement("div");
     info.className = "mono";
-    info.textContent = data.table + " — " + data.count + " row" + (data.count === 1 ? "" : "s") + " (limit " + data.limit + ")";
+    info.textContent = data.table + " — " + data.count + " row" + (data.count === 1 ? "" : "s") + " (limit " + data.limit + ")" +
+      (data.source === "live" ? " · live database" : " · in-memory stub");
     dataContainer.appendChild(info);
 
     if (!data.rows || data.rows.length === 0) {
       const p = document.createElement("p");
       p.className = "mono";
-      p.textContent = "No data. The in-memory stub is empty — seed it from a live database first.";
+      if (data.source === "live") {
+        p.textContent = "No rows in " + data.table + ".";
+      } else {
+        p.textContent = "No data. The in-memory stub is empty — configure a database connection (--db or connections: in yaga.yaml) or seed the stub from a live database first.";
+      }
       dataContainer.appendChild(p);
       return;
     }
 
     const cols = Object.keys(data.rows[0]);
     const tableEl = document.createElement("table");
-    tableEl.className = "rows";
+    tableEl.className = "rows data-table";
     const thead = document.createElement("thead");
     const hr = document.createElement("tr");
     for (const c of cols) {
@@ -2812,7 +2987,10 @@ async function loadSchemaData(tableName) {
       tbody.appendChild(tr);
     }
     tableEl.appendChild(tbody);
-    dataContainer.appendChild(tableEl);
+    const wrapEl = document.createElement("div");
+    wrapEl.className = "table-wrap";
+    wrapEl.appendChild(tableEl);
+    dataContainer.appendChild(wrapEl);
   }
 
   doLoad();
@@ -3205,6 +3383,38 @@ function pagePreview() {
 
 /* ---------- page: Raw YAML ---------- */
 
+// Find the line index of `- name: <resourceName>` inside the top-level
+// `resources:` block of the YAML text. Only matches list items at the
+// resources indent level (not nested `- name:` entries inside columns/fields).
+// Returns -1 when not found.
+function findResourceYamlLine(yaml, resourceName) {
+  const lines = yaml.split("\n");
+  let inResources = false;
+  let listIndent = null; // indent of `- ` items directly under resources:
+  const reTopKey = /^[A-Za-z_][\w-]*:\s*$/;
+  const reDashItem = /^(\s*)-\s+/;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (reTopKey.test(line)) {
+      inResources = line.trim() === "resources:";
+      if (inResources) listIndent = null;
+      continue;
+    }
+    if (!inResources) continue;
+    const mDash = line.match(reDashItem);
+    if (mDash) {
+      const indent = mDash[1].length;
+      if (listIndent === null) listIndent = indent;
+      // Only match `- name:` at the resources list-item indent level.
+      if (indent === listIndent) {
+        const mName = line.match(/^\s*-\s*name:\s*(.+?)\s*$/);
+        if (mName && mName[1] === resourceName) return i;
+      }
+    }
+  }
+  return -1;
+}
+
 async function pageRaw() {
   const root = content();
   h2(root, "Raw YAML");
@@ -3225,6 +3435,25 @@ async function pageRaw() {
   ta.value = data.yaml;
   ta.addEventListener("input", () => { state.rawDirty = true; });
   root.appendChild(ta);
+
+  // Scroll to the dataview we came from, if any.
+  const scrollTarget = state.rawScrollTarget;
+  state.rawScrollTarget = null;
+  if (scrollTarget) {
+    requestAnimationFrame(() => {
+      const line = findResourceYamlLine(data.yaml, scrollTarget);
+      if (line >= 0) {
+        // Character offset of the start of the target line.
+        const lines = data.yaml.split("\n");
+        let charOffset = 0;
+        for (let l = 0; l < line; l++) {
+          charOffset += lines[l].length + 1; // +1 for the newline
+        }
+        ta.focus();
+        ta.setSelectionRange(charOffset, charOffset);
+      }
+    });
+  }
 
   const searchRow = document.createElement("div");
   searchRow.className = "raw-search";

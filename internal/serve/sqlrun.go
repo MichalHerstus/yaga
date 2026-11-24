@@ -60,6 +60,7 @@ func SeedFromDB(dsn, driver string, cfg *types.Config, stub *sql.DB) error {
 	if cfg.Schema == nil || dsn == "" {
 		return nil
 	}
+	driver = driverForDSN(driver, dsn)
 	live, err := sql.Open(driver, dsn)
 	if err != nil {
 		return nil // unreachable DB → empty stub
@@ -484,11 +485,17 @@ func openLiveDB(driver, dsn string) (*sql.DB, error) {
 	return sql.Open(driver, dsn)
 }
 
-// driverForDSN detects the driver from the DSN prefix or returns the provided
-// driver value.
+// driverForDSN normalizes a configured driver name (yaga.yaml uses `postgres`,
+// `sqlite`, `mssql`) to the database/sql driver registered by this binary, and
+// falls back to sniffing the DSN prefix when the driver is unknown or empty.
 func driverForDSN(driver, dsn string) string {
-	if driver != "" {
-		return driver
+	switch strings.ToLower(strings.TrimSpace(driver)) {
+	case "pgx", "postgres", "postgresql":
+		return "pgx"
+	case "mssql", "sqlserver":
+		return "mssql"
+	case "sqlite", "sqlite3":
+		return "sqlite"
 	}
 	switch {
 	case strings.HasPrefix(dsn, "postgres://") || strings.HasPrefix(dsn, "postgresql://"):

@@ -207,6 +207,11 @@ input[type=checkbox] { accent-color: var(--accent); width: 15px; height: 15px; c
 .btn:disabled { opacity: 0.5; cursor: default; }
 
 .table-wrap { overflow-x: auto; }
+/* Live data browser (Schema browser + dataview "Show data"): keep cells on one
+   line and scroll horizontally instead of squeezing columns into the panel. */
+.data-browser .table-wrap { margin-top: 8px; }
+table.rows.data-table { width: max-content; min-width: 100%; }
+table.rows.data-table th, table.rows.data-table td { white-space: nowrap; vertical-align: top; }
 table.rows { width: 100%; border-collapse: collapse; font-size: 13px; }
 table.rows th, table.rows td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); }
 table.rows th { color: var(--text-faint); font-size: 11px; text-transform: uppercase; letter-spacing: .03em; }
@@ -220,6 +225,7 @@ table.rows td input[type=text], table.rows td input[type=number], table.rows td 
   width: 100%;
 }
 table.rows td input[type=checkbox] { width: auto; }
+.combo-cell { display: block; }
 table.rows .row-actions { white-space: nowrap; width: 1%; text-align: right; }
 
 .toolbar { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; flex-wrap: wrap; }
