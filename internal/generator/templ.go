@@ -1498,7 +1498,7 @@ templ statWidget(w viewmodels.WidgetData) {
                 </div>
                 }
                 <p class="text-sm text-gray-500 dark:text-gray-400">{ w.Label }</p>
-                <p class="text-2xl font-bold text-gray-900 dark:text-gray-100">
+                <p class={ "text-2xl font-bold " + statColorClass(w.Color) }>
                     if w.Prefix != "" {
                         <span class="text-lg">{ w.Prefix }</span>
                     }
@@ -1510,6 +1510,23 @@ templ statWidget(w viewmodels.WidgetData) {
             </div>
         </div>
     </div>
+}
+
+// statColorClass maps a widget's optional color name onto one of the pre-built
+// Tailwind text color utilities (only classes present in the vendored stylesheet
+// are used, so a stat color never needs a stylesheet rebuild). Unknown names
+// fall back to the brand primary color.
+func statColorClass(color string) string {
+    switch color {
+    case "green":
+        return "text-green-600"
+    case "red":
+        return "text-red-600 dark:text-red-300"
+    case "", "gray", "slate", "zinc", "neutral", "stone", "black":
+        return "text-gray-900 dark:text-gray-100"
+    default:
+        return "text-brand-primary"
+    }
 }
 
 templ iconSVG(name string) {

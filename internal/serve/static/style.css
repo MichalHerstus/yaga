@@ -145,6 +145,18 @@ h3 { margin: 22px 0 10px; font-size: 15px; color: var(--accent-2); }
 .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 18px; }
 .grid .span-2 { grid-column: 1 / -1; }
 
+/* Widget editor cards (Pages > page editor) */
+.widget-list { display: flex; flex-direction: column; gap: 12px; }
+.widget-list.nested { margin-top: 8px; padding-left: 12px; border-left: 2px solid var(--border); }
+.widget-card { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; }
+.widget-card-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+.widget-card-head .spacer { flex: 1; }
+.widget-type-badge { font-family: var(--mono); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--accent); border: 1px solid var(--accent); border-radius: 5px; padding: 2px 6px; }
+.widget-card-title { font-size: 14px; font-weight: 600; color: var(--text); }
+.widget-card-head select { background: var(--bg-alt); border: 1px solid var(--border); color: var(--text); border-radius: 6px; padding: 4px 8px; font-size: 12px; font-family: var(--font); }
+.widget-subgrid { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--border); }
+.widget-subgrid > .mono { margin-bottom: 8px; }
+
 .field { display: flex; flex-direction: column; gap: 4px; }
 .field label { font-size: 12px; color: var(--text-dim); }
 .field input[type=text], .field input[type=number], .field input[type=password], .field select, .field textarea {

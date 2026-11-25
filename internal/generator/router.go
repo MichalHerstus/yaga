@@ -259,6 +259,17 @@ func (g *Generator) generatePage(p types.Page) error {
             Value: %s,
         })`, i, w.Query, i, p.Name, i, w.Label, w.Label, w.Color, w.Icon, valExpr))
 		case "chart":
+			chartQuery := w.Query
+			xCol, yCol, chartType := "", "", "bar"
+			if w.Chart != nil {
+				if w.Chart.Query != "" {
+					chartQuery = w.Chart.Query
+				}
+				xCol, yCol = w.Chart.X, w.Chart.Y
+				if w.Chart.Type != "" {
+					chartType = w.Chart.Type
+				}
+			}
 			widgetInit = append(widgetInit, fmt.Sprintf(`
         {
         var chartLabels []string
@@ -269,12 +280,33 @@ func (g *Generator) generatePage(p types.Page) error {
                 log.Printf("page %%s widget %%d (%%s) chart: %%v", %q, %d, %q, err)
             } else {
                 defer rows.Close()
+                cols, _ := rows.Columns()
+                xi, yi := 0, 1
+                for j, c := range cols {
+                    if c == %q {
+                        xi = j
+                    }
+                    if c == %q {
+                        yi = j
+                    }
+                }
                 for rows.Next() {
-                    var label string
-                    var val float64
-                    if err := rows.Scan(&label, &val); err != nil {
+                    vals := make([]interface{}, len(cols))
+                    ptrs := make([]interface{}, len(cols))
+                    for j := range vals {
+                        ptrs[j] = &vals[j]
+                    }
+                    if err := rows.Scan(ptrs...); err != nil {
                         log.Printf("page %%s widget %%d (%%s) chart scan: %%v", %q, %d, %q, err)
                         continue
+                    }
+                    label := ""
+                    if xi >= 0 && xi < len(vals) {
+                        label = viewmodels.Stringify(vals[xi])
+                    }
+                    var val float64
+                    if yi >= 0 && yi < len(vals) {
+                        val = viewmodels.ToFloat(vals[yi])
                     }
                     chartLabels = append(chartLabels, label)
                     chartValues = append(chartValues, val)
@@ -290,7 +322,7 @@ func (g *Generator) generatePage(p types.Page) error {
             ChartLabelsJSON: string(chartLabelsJSON),
             ChartValuesJSON: string(chartValuesJSON),
         })
-        }`, w.Query, p.Name, i, w.Label, p.Name, i, w.Label, w.Label, w.Chart.Type))
+        }`, chartQuery, p.Name, i, w.Label, xCol, yCol, p.Name, i, w.Label, w.Label, chartType))
 		case "table":
 			colList := "[]string{"
 			for _, col := range w.DataColumns {

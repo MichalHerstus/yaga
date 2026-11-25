@@ -2264,6 +2264,75 @@ func TestGenerateWidgetErrorLogging(t *testing.T) {
 	}
 }
 
+// TestGenerateChartQueryXY ensures a chart widget uses its own chart.query
+// (falling back to the widget-level query), scans the configured x/y columns by
+// name, and tolerates a missing chart block (defaulting to a bar chart) instead
+// of nil-panicking at generation time.
+func TestGenerateChartQueryXY(t *testing.T) {
+	cfg := &types.Config{
+		Version: "1",
+		Panel:   types.Panel{ID: "admin", Path: "/admin", Name: "Admin"},
+		Connections: map[string]types.Connection{
+			"default": {Driver: "postgres", DSN: "x"},
+		},
+		Resources: []types.Resource{
+			{Name: "User", List: &types.ListConfig{Columns: []types.Column{{Name: "name"}}}},
+		},
+		Pages: []types.Page{
+			{
+				Name: "Dashboard",
+				Widgets: []types.Widget{
+					{
+						Type:  "chart",
+						Label: "Revenue",
+						Query: "SELECT ignored",
+						Chart: &types.ChartConfig{
+							Type:  "line",
+							Query: "SELECT date_trunc('month', created_at) AS x, SUM(total) AS y FROM orders GROUP BY x",
+							X:     "x",
+							Y:     "y",
+						},
+					},
+					{
+						Type:  "chart",
+						Label: "NoChartBlock",
+						Query: "SELECT a, b FROM t",
+					},
+				},
+			},
+		},
+	}
+	dir := t.TempDir()
+	g := New(cfg, dir)
+	if err := g.Generate(); err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	assertGeneratedGoParses(t, dir)
+
+	page, err := os.ReadFile(filepath.Join(dir, "internal/panel/pages", "dashboard.go"))
+	if err != nil {
+		t.Fatalf("read dashboard.go: %v", err)
+	}
+	pageStr := string(page)
+	for _, want := range []string{
+		`q := "SELECT date_trunc('month', created_at) AS x, SUM(total) AS y FROM orders GROUP BY x"`,
+		`ChartType: "line"`,
+		`if c == "x"`,
+		`if c == "y"`,
+		`viewmodels.Stringify(vals[xi])`,
+		`viewmodels.ToFloat(vals[yi])`,
+		`q := "SELECT a, b FROM t"`,
+		`ChartType: "bar"`,
+	} {
+		if !strings.Contains(pageStr, want) {
+			t.Errorf("dashboard.go missing %q\n--- generated:\n%s", want, pageStr)
+		}
+	}
+	if strings.Contains(pageStr, `q := "SELECT ignored"`) {
+		t.Error("chart.query must take precedence over the widget-level query")
+	}
+}
+
 // TestGeneratePageImportsAreConditional ensures a page handler imports fmt,
 // html/template and encoding/json only when a widget actually references them.
 // The default dashboard emitted by `init --db` has widgets: [], and a page with

@@ -395,7 +395,19 @@ function fieldEl(grid, label) {
   return wrap;
 }
 
-function textField(grid, label, obj, key, readOnly) {
+// Small parameter explanation shown under a settings field.
+function fieldHint(wrap, text) {
+  if (!text) return;
+  const h = document.createElement("div");
+  h.className = "mono field-hint";
+  h.style.fontSize = "11px";
+  h.style.color = "var(--text-faint)";
+  h.style.marginTop = "4px";
+  h.textContent = text;
+  wrap.appendChild(h);
+}
+
+function textField(grid, label, obj, key, readOnly, hint) {
   const wrap = fieldEl(grid, label);
   const i = document.createElement("input");
   i.type = "text";
@@ -412,6 +424,7 @@ function textField(grid, label, obj, key, readOnly) {
     });
   }
   wrap.appendChild(i);
+  fieldHint(wrap, hint);
   return i;
 }
 
@@ -507,7 +520,7 @@ function policyField(grid, label, obj, key, roles, readOnly) {
   return s;
 }
 
-function numField(grid, label, obj, key, readOnly) {
+function numField(grid, label, obj, key, readOnly, hint) {
   const wrap = fieldEl(grid, label);
   const i = document.createElement("input");
   i.type = "number";
@@ -523,10 +536,11 @@ function numField(grid, label, obj, key, readOnly) {
     });
   }
   wrap.appendChild(i);
+  fieldHint(wrap, hint);
   return i;
 }
 
-function colorField(grid, label, obj, key, fallback, readOnly) {
+function colorField(grid, label, obj, key, fallback, readOnly, hint) {
   const wrap = fieldEl(grid, label);
   const row = document.createElement("div");
   row.className = "color-field";
@@ -559,10 +573,11 @@ function colorField(grid, label, obj, key, fallback, readOnly) {
   }
   row.append(swatch, text);
   wrap.appendChild(row);
+  fieldHint(wrap, hint);
   return wrap;
 }
 
-function boolField(grid, label, obj, key, readOnly) {
+function boolField(grid, label, obj, key, readOnly, hint) {
   const wrap = document.createElement("div");
   wrap.className = "checkbox-row field";
   const cb = document.createElement("input");
@@ -580,10 +595,11 @@ function boolField(grid, label, obj, key, readOnly) {
   l.textContent = label;
   wrap.append(cb, l);
   grid.appendChild(wrap);
+  fieldHint(wrap, hint);
   return cb;
 }
 
-function selectField(grid, label, obj, key, options, { allowEmpty } = {}, readOnly) {
+function selectField(grid, label, obj, key, options, { allowEmpty } = {}, readOnly, hint) {
   const wrap = fieldEl(grid, label);
   const s = document.createElement("select");
   if (allowEmpty) {
@@ -610,10 +626,11 @@ function selectField(grid, label, obj, key, options, { allowEmpty } = {}, readOn
     });
   }
   wrap.appendChild(s);
+  fieldHint(wrap, hint);
   return s;
 }
 
-function stringListField(grid, label, arrObj, key, readOnly) {
+function stringListField(grid, label, arrObj, key, readOnly, hint) {
   const wrap = fieldEl(grid, label);
   const i = document.createElement("input");
   i.type = "text";
@@ -632,6 +649,7 @@ function stringListField(grid, label, arrObj, key, readOnly) {
     });
   }
   wrap.appendChild(i);
+  fieldHint(wrap, hint);
   return i;
 }
 
@@ -871,7 +889,7 @@ function iconSelectField(grid, label, obj, key, readOnly) {
 
 /* ---------- image field (logo / favicon) ---------- */
 
-function imageField(grid, label, obj, key) {
+function imageField(grid, label, obj, key, imageHint) {
   const wrap = fieldEl(grid, label);
   wrap.classList.add("image-field-wrap");
 
@@ -920,6 +938,7 @@ function imageField(grid, label, obj, key) {
   });
 
   wrap.append(input, preview, hint);
+  fieldHint(wrap, imageHint);
   return input;
 }
 
@@ -1345,24 +1364,25 @@ function pagePanel() {
   const card = cardEl(root);
   const g = gridWrap(card);
 
-  textField(g, "Name", c.panel, "name");
-  textField(g, "ID", c.panel, "id");
-  textField(g, "Path", c.panel, "path");
-  imageField(g, "Logo", c.panel.brand, "logo");
-  imageField(g, "Favicon", c.panel.brand, "favicon");
-  colorField(g, "Primary color", c.panel.brand.colors, "primary", "#6366f1");
-  colorField(g, "Secondary color", c.panel.brand.colors, "secondary", "#8b5cf6");
-  numField(g, "Sidebar width", c.panel.layout.sidebar, "width");
-  numField(g, "Collapsed width", c.panel.layout.sidebar, "collapsed_width");
+  textField(g, "Name", c.panel, "name", false, "Display name of the panel shown in the dashboard topbar.");
+  textField(g, "ID", c.panel, "id", false, "Unique panel identifier, used in URLs (e.g. admin).");
+  textField(g, "Path", c.panel, "path", false, "URL path prefix for the panel, must start with / (e.g. /admin).");
+  imageField(g, "Logo", c.panel.brand, "logo", "Brand image shown in the topbar (JPEG/PNG).");
+  imageField(g, "Favicon", c.panel.brand, "favicon", "Icon shown in the browser tab (JPEG/PNG).");
+  colorField(g, "Primary color", c.panel.brand.colors, "primary", "#6366f1", false, "Brand primary color used for buttons, links and accents.");
+  colorField(g, "Secondary color", c.panel.brand.colors, "secondary", "#8b5cf6", false, "Brand secondary color.");
+  numField(g, "Sidebar width", c.panel.layout.sidebar, "width", false, "Sidebar width in pixels (e.g. 240).");
+  numField(g, "Collapsed width", c.panel.layout.sidebar, "collapsed_width", false, "Sidebar width when collapsed, in pixels.");
   selectField(g, "Max content width", c.panel.layout, "max_content_width",
-    ["none", "sm", "md", "lg", "xl", "2xl", "3xl", "4xl", "5xl", "6xl", "7xl"], { allowEmpty: true });
-  textField(g, "Font family", c.panel.theme.font, "family");
-  textField(g, "Mono font", c.panel.theme.font, "mono");
+    ["none", "sm", "md", "lg", "xl", "2xl", "3xl", "4xl", "5xl", "6xl", "7xl"], { allowEmpty: true }, undefined,
+    "Max width of the page content area.");
+  textField(g, "Font family", c.panel.theme.font, "family", false, "Main font family (e.g. \"Inter, sans-serif\").");
+  textField(g, "Mono font", c.panel.theme.font, "mono", false, "Monospace font family (e.g. ui-monospace, Menlo, monospace).");
   const checks = document.createElement("div");
   checks.className = "checkbox-group";
-  boolField(checks, "Sidebar collapsible", c.panel.layout.sidebar, "collapsible");
-  boolField(checks, "Topbar sticky", c.panel.layout.topbar, "sticky");
-  boolField(checks, "Dark mode", c.panel.theme, "dark_mode");
+  boolField(checks, "Sidebar collapsible", c.panel.layout.sidebar, "collapsible", false, "Let users collapse the sidebar.");
+  boolField(checks, "Topbar sticky", c.panel.layout.topbar, "sticky", false, "Keep the topbar fixed at the top while scrolling.");
+  boolField(checks, "Dark mode", c.panel.theme, "dark_mode", false, "Enable the dark theme by default.");
   card.appendChild(checks);
 }
 
@@ -1388,12 +1408,13 @@ function pageConnections() {
     card.appendChild(head);
 
     const g = gridWrap(card);
-    selectField(g, "Driver", conn, "driver", ["postgres", "sqlite", "sqlite3", "mssql", "sqlserver"]);
-    textField(g, "DSN", conn, "dsn");
+    selectField(g, "Driver", conn, "driver", ["postgres", "sqlite", "sqlite3", "mssql", "sqlserver"], undefined, undefined,
+      "Database driver for the business database (postgres, sqlite, mssql...).");
+    textField(g, "DSN", conn, "dsn", false, "Data Source Name / connection string to the business database.");
     if (!conn.pool) conn.pool = {};
-    numField(g, "Max open", conn.pool, "max_open");
-    numField(g, "Max idle", conn.pool, "max_idle");
-    textField(g, "Conn lifetime (e.g. 30m)", conn.pool, "lifetime");
+    numField(g, "Max open", conn.pool, "max_open", false, "Maximum number of open connections in the DB pool.");
+    numField(g, "Max idle", conn.pool, "max_idle", false, "Maximum number of idle connections kept in the pool.");
+    textField(g, "Conn lifetime (e.g. 30m)", conn.pool, "lifetime", false, "Maximum lifetime of a pooled connection (e.g. 30m).");
   }
 
 }
@@ -1406,11 +1427,11 @@ function pageAuth() {
   h2(root, "Auth");
   const card = cardEl(root);
   const g = gridWrap(card);
-  textField(g, "Guard", a, "guard");
-  textField(g, "Provider", a, "provider");
-  textField(g, "Auth table", a, "table");
-  stringListField(g, "Login fields", a.login, "fields");
-  textField(g, "Login redirect (fallback)", a.login, "redirect");
+  textField(g, "Guard", a, "guard", false, "Authentication guard (e.g. form).");
+  textField(g, "Provider", a, "provider", false, "Authentication provider (e.g. db).");
+  textField(g, "Auth table", a, "table", false, "Table in the system DB that stores users and credentials.");
+  stringListField(g, "Login fields", a.login, "fields", false, "Column(s) used to identify the user at login (e.g. email or login).");
+  textField(g, "Login redirect (fallback)", a.login, "redirect", false, "Path to redirect to after login when no per-role target is set (e.g. /admin/dashboard).");
   if (!a.login.redirects) a.login.redirects = {};
   h3(root, "Role redirect targets");
   const redirectCard = cardEl(root);
@@ -1717,8 +1738,8 @@ function pageAuth() {
   h3(root, "Login rate limit");
   const card2 = cardEl(root);
   const g2 = gridWrap(card2);
-  numField(g2, "Max attempts", a.login.rate_limit, "max_attempts");
-  numField(g2, "Window seconds", a.login.rate_limit, "window_seconds");
+  numField(g2, "Max attempts", a.login.rate_limit, "max_attempts", false, "Failed login attempts allowed within the window before the account is throttled.");
+  numField(g2, "Window seconds", a.login.rate_limit, "window_seconds", false, "Time window in seconds for counting failed login attempts.");
   const hint = document.createElement("p");
   hint.className = "mono";
   hint.textContent = "max_attempts: 0 (or absent) disables rate limiting";
@@ -3148,13 +3169,216 @@ function pagePages() {
   root.appendChild(add);
 }
 
-const WIDGET_SCHEMA = [
-  { key: "type", label: "Type", type: "select", options: ["stat", "stats_grid", "chart", "table", "list", "html"] },
-  { key: "label", label: "Label" },
-  { key: "query", label: "Query" },
-  { key: "limit", label: "Limit", type: "number" },
-  { key: "columns", label: "Columns", type: "number" },
-];
+const WIDGET_TYPES = ["stat", "stats_grid", "chart", "table", "list", "html"];
+const CHART_TYPES = ["bar", "line", "pie", "area"];
+
+// newWidget returns a fresh widget object for the given type, seeding the
+// sub-structures that type needs so the editor never renders against null.
+function newWidget(type) {
+  const t = type || "stat";
+  const w = { type: t };
+  if (t === "chart") w.chart = { type: "bar" };
+  if (t === "stats_grid") w.widgets = [];
+  return w;
+}
+
+function widgetQueryHint(type) {
+  switch (type) {
+    case "stat": return "SQL returning a single number, e.g. SELECT COUNT(*) FROM orders.";
+    case "chart": return "Optional fallback query — the chart query below takes precedence when set.";
+    case "table": return "SQL returning the rows to display.";
+    case "list": return "SQL returning two columns: a label and a value.";
+    case "html": return "SQL returning a single HTML string (trusted content).";
+    default: return "";
+  }
+}
+
+// editWidgetJSON opens a raw-JSON modal for advanced widgets. Mirrors the
+// collection editor's escape hatch: parse, replace the object's keys in place,
+// then redraw so the structured fields pick up the change.
+function editWidgetJSON(w, redraw) {
+  openModal("Edit widget (JSON, YAML field names)", (body, ok, cancel, close) => {
+    const ta = document.createElement("textarea");
+    ta.value = JSON.stringify(w, null, 2);
+    body.appendChild(ta);
+    const err = document.createElement("div");
+    err.style.color = "var(--red)";
+    body.appendChild(err);
+    ok.addEventListener("click", () => {
+      let v;
+      try { v = JSON.parse(ta.value); } catch (e) { err.textContent = "Invalid JSON: " + e.message; return; }
+      if (!v || typeof v !== "object" || Array.isArray(v)) { err.textContent = "Expected a JSON object"; return; }
+      for (const k of Object.keys(w)) delete w[k];
+      Object.assign(w, v);
+      markDirty();
+      close();
+      redraw();
+    });
+    cancel.textContent = "Close";
+  });
+}
+
+// widgetCard renders one widget as a titled card with a type selector, common
+// fields and the fields that apply to the selected type.
+function widgetCard(w, idx, widgets, redraw, opts) {
+  const readOnly = !!opts.readOnly;
+  const card = document.createElement("div");
+  card.className = "widget-card";
+
+  const head = document.createElement("div");
+  head.className = "widget-card-head";
+  const badge = document.createElement("span");
+  badge.className = "widget-type-badge";
+  badge.textContent = w.type || "widget";
+  head.appendChild(badge);
+  const title = document.createElement("span");
+  title.className = "widget-card-title";
+  title.textContent = w.label || "(no label)";
+  head.appendChild(title);
+  const spacer = document.createElement("div");
+  spacer.className = "spacer";
+  head.appendChild(spacer);
+
+  if (!readOnly) {
+    const typeSel = document.createElement("select");
+    typeSel.className = "widget-type-select";
+    // A stats_grid renders its nested widgets as stat cards, so nested lists
+    // only offer "stat" (a legacy non-stat entry keeps its own type as an option).
+    const typeChoices = opts.depth ? ["stat"] : WIDGET_TYPES;
+    const choices = typeChoices.includes(w.type) ? typeChoices : [w.type].concat(typeChoices);
+    for (const t of choices) {
+      const o = document.createElement("option");
+      o.value = t;
+      o.textContent = t;
+      typeSel.appendChild(o);
+    }
+    typeSel.value = w.type || "stat";
+    typeSel.addEventListener("change", () => {
+      w.type = typeSel.value;
+      if (w.type === "chart" && !w.chart) w.chart = { type: "bar" };
+      if (w.type === "stats_grid" && !Array.isArray(w.widgets)) w.widgets = [];
+      markDirty();
+      redraw();
+    });
+    head.appendChild(typeSel);
+
+    const up = mkButton("↑", () => {
+      if (idx > 0) {
+        [widgets[idx - 1], widgets[idx]] = [widgets[idx], widgets[idx - 1]];
+        markDirty();
+        redraw();
+      }
+    });
+    up.title = "Move up";
+    up.disabled = idx === 0;
+    const down = mkButton("↓", () => {
+      if (idx < widgets.length - 1) {
+        [widgets[idx + 1], widgets[idx]] = [widgets[idx], widgets[idx + 1]];
+        markDirty();
+        redraw();
+      }
+    });
+    down.title = "Move down";
+    down.disabled = idx === widgets.length - 1;
+    const jsonBtn = mkButton("⋯", () => editWidgetJSON(w, redraw));
+    jsonBtn.title = "Edit raw JSON";
+    const del = mkButton("✕", () => { widgets.splice(idx, 1); markDirty(); redraw(); });
+    del.title = "Delete widget";
+    del.classList.add("danger");
+    head.append(up, down, jsonBtn, del);
+  }
+  card.appendChild(head);
+
+  const g = gridWrap(card);
+  const labelInput = textField(g, "Label", w, "label", readOnly, "Shown as the widget heading.");
+  if (labelInput) {
+    labelInput.addEventListener("change", () => {
+      title.textContent = w.label || "(no label)";
+    });
+  }
+  textField(g, "Query", w, "query", readOnly, widgetQueryHint(w.type));
+
+  switch (w.type) {
+    case "stat":
+      iconSelectField(g, "Icon", w, "icon", readOnly);
+      textField(g, "Color", w, "color", readOnly, "Optional value color: green, red or gray (other names use the brand color).");
+      textField(g, "Prefix", w, "prefix", readOnly, "Optional text shown before the value (e.g. $).");
+      break;
+
+    case "chart": {
+      if (!w.chart) w.chart = { type: "bar" };
+      selectField(g, "Chart type", w.chart, "type", CHART_TYPES, { allowEmpty: true }, readOnly,
+        "Chart.js chart type (bar, line, pie or area).");
+      textField(g, "Chart query", w.chart, "query", readOnly,
+        "SQL returning a label column (x) and a numeric column (y). Overrides Query when set.");
+      textField(g, "X column", w.chart, "x", readOnly,
+        "Name of the label column in the chart query result (default: first column).");
+      textField(g, "Y column", w.chart, "y", readOnly,
+        "Name of the numeric column in the chart query result (default: second column).");
+      break;
+    }
+
+    case "table":
+      stringListField(g, "Data columns", w, "data_columns", readOnly,
+        "Comma-separated column names shown in the table, in order.");
+      break;
+
+    case "stats_grid": {
+      numField(g, "Columns", w, "columns", readOnly,
+        "Number of stat cards per row (1–12).");
+      if (!Array.isArray(w.widgets)) w.widgets = [];
+      const sub = document.createElement("div");
+      sub.className = "widget-subgrid";
+      const subHint = document.createElement("div");
+      subHint.className = "mono";
+      subHint.textContent = "Sub-widgets (stat cards inside the grid):";
+      sub.appendChild(subHint);
+      renderWidgetList(sub, w.widgets, {
+        readOnly,
+        addLabel: "+ Add sub-widget",
+        nested: true,
+        depth: (opts.depth || 0) + 1,
+      });
+      card.appendChild(sub);
+      break;
+    }
+  }
+
+  return card;
+}
+
+// renderWidgetList renders an editable widget list (plus an "add" button) into
+// container. Called recursively for a stats_grid's nested widgets.
+function renderWidgetList(container, widgets, opts = {}) {
+  if (!Array.isArray(widgets)) widgets = [];
+  const list = document.createElement("div");
+  list.className = "widget-list" + (opts.nested ? " nested" : "");
+  container.appendChild(list);
+
+  function redraw() {
+    list.innerHTML = "";
+    if (widgets.length === 0) {
+      const p = document.createElement("p");
+      p.className = "mono";
+      p.textContent = opts.nested ? "No sub-widgets yet." : "No widgets yet.";
+      list.appendChild(p);
+    }
+    widgets.forEach((w, idx) => list.appendChild(widgetCard(w, idx, widgets, redraw, opts)));
+  }
+
+  if (!opts.readOnly) {
+    const add = btn(opts.addLabel || "+ Add widget", "small");
+    add.addEventListener("click", () => {
+      widgets.push(newWidget("stat"));
+      markDirty();
+      redraw();
+    });
+    container.appendChild(add);
+  }
+
+  redraw();
+  return { redraw };
+}
 
 function renderPageEditor(name) {
   const c = state.config;
@@ -3168,24 +3392,14 @@ function renderPageEditor(name) {
 
   const card = cardEl(root);
   const g = gridWrap(card);
-  textField(g, "Name", p, "name");
-  textField(g, "Path", p, "path");
-  boolField(g, "Default page", p, "default");
+  textField(g, "Name", p, "name", false, "Page name, used as the sidebar label and URL segment.");
+  textField(g, "Path", p, "path", false, "URL path for the page (e.g. /dashboard).");
+  boolField(g, "Default page", p, "default", false, "Show this page at the panel root after login.");
 
   if (!Array.isArray(p.widgets)) p.widgets = [];
   h3(root, "Widgets");
   const cardW = cardEl(root);
-  const wCols = document.createElement("div");
-  wCols.className = "toolbar";
-  const wc = document.createElement("h3");
-  wc.style.margin = "0";
-  wc.textContent = "Widgets";
-  wCols.appendChild(wc);
-  const addW = btn("+ Add widget", "small");
-  addW.addEventListener("click", () => { p.widgets.push({ type: "stat" }); markDirty(); renderPageEditor(name); });
-  wCols.appendChild(addW);
-  cardW.appendChild(wCols);
-  collectionEditor(cardW, p.widgets, WIDGET_SCHEMA, { jsonTitle: "Edit widget (JSON)" });
+  renderWidgetList(cardW, p.widgets, { addLabel: "+ Add widget" });
 }
 
 /* ---------- page: Validate ---------- */

@@ -595,7 +595,7 @@ pages:
     widgets:
       - { type: stat,       label: "Total Users",   query: "SELECT COUNT(*) FROM users", icon: users }
       - { type: chart,      label: "Revenue",       query: "SELECT month, total FROM revenue ORDER BY month",
-          chart: { type: line } }
+          chart: { type: line, x: month, y: total } }
       - { type: table,      label: "Recent Orders", query: "SELECT id, customer_id, total FROM orders ORDER BY created_at DESC LIMIT 5",
           data_columns: [id, customer_id, total] }
       - { type: list,       label: "Top Products",  query: "SELECT name, price FROM products ORDER BY price DESC LIMIT 5" }
@@ -604,7 +604,9 @@ pages:
 
 Widgets: `stat`, `stats_grid`, `chart` (line/bar/pie/area), `table`, `list`, `html`.
 `query` is raw SQL executed at request time; widget errors are logged and never blank the
-page.
+page. For `chart`, `chart.x`/`chart.y` name the label and value columns of the chart
+query (defaulting to the first and second column); `chart.query` overrides the
+widget-level `query` when set. `stat` accepts `icon`, `color` and `prefix`.
 
 ### Field types
 

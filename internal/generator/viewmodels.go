@@ -47,6 +47,7 @@ import (
     "encoding/json"
     "fmt"
     "html/template"
+    "strconv"
     "time"
 )
 
@@ -355,6 +356,50 @@ func Stringify(v interface{}) string {
 // the boolean cell renderer and checkbox checked-state detection.
 func BoolValue(v interface{}) bool {
 	return Stringify(v) == "true"
+}
+
+// ToFloat converts a scanned SQL value into a float64 for chart series,
+// tolerating int/float/[]byte/string and NULL wrappers. Non-numeric values
+// yield 0 so a malformed chart row never aborts the whole page.
+func ToFloat(v interface{}) float64 {
+	switch t := v.(type) {
+	case nil:
+		return 0
+	case float64:
+		return t
+	case float32:
+		return float64(t)
+	case int64:
+		return float64(t)
+	case int32:
+		return float64(t)
+	case int:
+		return float64(t)
+	case []byte:
+		f, _ := strconv.ParseFloat(string(t), 64)
+		return f
+	case string:
+		f, _ := strconv.ParseFloat(t, 64)
+		return f
+	case sql.NullFloat64:
+		if t.Valid {
+			return t.Float64
+		}
+		return 0
+	case sql.NullInt64:
+		if t.Valid {
+			return float64(t.Int64)
+		}
+		return 0
+	case sql.NullInt32:
+		if t.Valid {
+			return float64(t.Int32)
+		}
+		return 0
+	default:
+		f, _ := strconv.ParseFloat(Stringify(v), 64)
+		return f
+	}
 }
 
 // TimeValue unwraps a time.Time or sql.NullTime value, returning the time and
