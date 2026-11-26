@@ -728,3 +728,39 @@ func TestPreviewNoLiveDataMessage(t *testing.T) {
 		t.Errorf("non-empty table live preview should show real rows")
 	}
 }
+
+// TestPreviewCardNilConfig guards against a nil-pointer panic when a resource
+// has no card: section configured.
+func TestPreviewCardNilConfig(t *testing.T) {
+	cfg := testConfig()
+	// Resource has no Card section
+	s, _ := setupServer(t, cfg)
+
+	rec, _ := get(t, s.Handler(), "GET", "/preview?view=card&resource=User&embed=1", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "Card view not configured") {
+		t.Errorf("card view without config should show 'Card view not configured'")
+	}
+}
+
+// TestPreviewCardNilConfigLive guards that live=1 with no card config shows
+// only the "not configured" banner, not a misleading "No live data" message.
+func TestPreviewCardNilConfigLive(t *testing.T) {
+	cfg := testConfig()
+	s, dir := setupServer(t, cfg)
+	mustCreateTestTable(t, dir)
+
+	rec, _ := get(t, s.Handler(), "GET", "/preview?view=card&resource=User&live=1&embed=1", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "Card view not configured") {
+		t.Errorf("card view without config should show 'Card view not configured'")
+	}
+	if strings.Contains(body, "No live data for this resource") {
+		t.Errorf("card view without config should not show 'No live data' banner")
+	}
+}

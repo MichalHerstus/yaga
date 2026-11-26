@@ -3496,7 +3496,9 @@ function pagePreview() {
   iframe.title = "Dashboard preview";
 
   function targets() {
-    if (state.preview.view === "resource") return (c.resources || []).map((r) => r.name);
+    if (state.preview.view === "resource" || state.preview.view === "card" || state.preview.view === "detail" || state.preview.view === "form") {
+      return (c.resources || []).map((r) => r.name);
+    }
     return (c.pages || []).map((p) => p.name);
   }
   function pickTarget() {
@@ -3508,11 +3510,14 @@ function pagePreview() {
   function previewURL() {
     const q = new URLSearchParams({ view: state.preview.view, theme: state.preview.theme });
     if (state.preview.liveData) q.set("live", "1");
-    if (state.preview.target) q.set(state.preview.view === "resource" ? "resource" : "page", state.preview.target);
-    // detail/form/card views need resource + id/mode
-    if (state.preview.view === "detail" || state.preview.view === "form" || state.preview.view === "card") {
-      q.set("resource", state.preview.target);
+    if (state.preview.target) {
+      if (state.preview.view === "resource" || state.preview.view === "card" || state.preview.view === "detail" || state.preview.view === "form") {
+        q.set("resource", state.preview.target);
+      } else {
+        q.set("page", state.preview.target);
+      }
     }
+    // detail/form/card views need resource + id/mode
     if (state.preview.view === "form") {
       q.set("mode", state.preview.formMode || "create");
       if (state.preview.formId) q.set("id", state.preview.formId);

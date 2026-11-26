@@ -1347,13 +1347,19 @@ func cardPreviewBody(cfg *types.Config, resName string, live bool) string {
 	}
 	fmt.Fprintf(&b, "        <h1 class=\"text-2xl font-bold mb-6 text-gray-900 dark:text-gray-100\">%s</h1>\n", escHTML(title))
 
-	columns := res.Card.Columns
-	if columns <= 0 || columns > 12 {
-		columns = 4
-	}
-	rows := res.Card.Rows
-	if rows <= 0 {
-		rows = 2
+	columns := 4
+	rows := 2
+	if res.Card != nil {
+		columns = res.Card.Columns
+		if columns <= 0 || columns > 12 {
+			columns = 4
+		}
+		rows = res.Card.Rows
+		if rows <= 0 {
+			rows = 2
+		}
+	} else {
+		fmt.Fprintf(&b, "        <div class=\"mb-4 rounded-md border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-300\">Card view not configured for this resource.</div>\n")
 	}
 
 	idCol := idColumn(*res)
@@ -1364,7 +1370,7 @@ func cardPreviewBody(cfg *types.Config, resName string, live bool) string {
 	if live {
 		dsn, driver := sLiveConnection(cfg)
 		liveAttempted = dsn != ""
-		if dsn != "" {
+		if dsn != "" && res.Card != nil {
 			limit := columns * rows
 			r, err := queryLive(driver, dsn, previewSelect(driver, "*", "FROM "+previewIdent(driver, table), limit))
 			if err == nil {
@@ -1372,18 +1378,22 @@ func cardPreviewBody(cfg *types.Config, resName string, live bool) string {
 			}
 		}
 	}
-	if liveAttempted && len(rowMaps) == 0 && liveNote == "" {
+	if liveAttempted && len(rowMaps) == 0 && liveNote == "" && res.Card != nil {
 		liveNote = "No live data for this resource!"
 	}
 	if len(rowMaps) == 0 {
-		rowMaps = fakeResourceRows(cardFieldsAsColumns(res.Card), columns*rows, idCol)
+		var cardCols []types.Column
+		if res.Card != nil {
+			cardCols = cardFieldsAsColumns(res.Card)
+		}
+		rowMaps = fakeResourceRows(cardCols, columns*rows, idCol)
 	}
 
 	if liveNote != "" {
 		fmt.Fprintf(&b, "        <div class=\"mb-4 rounded-md border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-300\">%s</div>\n", escHTML(liveNote))
 	}
 
-	kanban := res.Card.KanbanField != ""
+	kanban := res.Card != nil && res.Card.KanbanField != ""
 	if kanban {
 		b.WriteString("        <div class=\"flex gap-4 overflow-x-auto pb-4\">\n")
 		// Bucket keys from the kanban field values.
