@@ -14,55 +14,32 @@ zachytí její schéma a přidává chování **navrch** — nenahrazuje dobrý 
 
 ## 1. Instalace
 
-### 1.1 Předpoklady — funkční Go toolchain
+### 1.1 Předpoklady
 
-| Nástroj |Potřebný pro ||
+YAGA je k dispozici jako jeden připravený binární soubor pro váš operační systém — k **spuštění** samotného YAGA není potřeba toolchain Go. Go (1.26+) potřebujete pouze na stroji, kde sestavujete **vygenerovaný dashboard** (`go mod tidy`, `go tool templ generate`, `go build`), např. na vývojovém stroji nebo v CI. Vygenerovaný dashboard lze pak nasadit jako samostatný binární soubor na jakýkoli stroj.
+
+| Nástroj | Potřebný pro | Poznámka |
 |---|---|---|
-| [Go](https://go.dev/dl/) 1.26+ | pro komplilace vygenerovaného dashboardu a instalaci YAGA ze zdrojových kódů |
+| [Go](https://go.dev/dl/) 1.26+ | Sestavení **vygenerovaného** dashboardu | Pouze kde spouštíte `make build` / `go build ./...`; samotný YAGA je již zkompilován |
 
-Tailwind stylesheet a Chart.js jsou uloženy ve vygenerovaném projektu.
+Kdekoliv není potřeba Node.js/npm, sqlc ani binární soubor Tailwind. Tailwind stylesheet je předem sestaven a zabalen do vygenerovaného projektu, Chart.js je vložen do binárního souboru YAGA — běžící dashboard nepotřebuje **žádné připojení k internetu**.
 
-### 1.2 Instalace ze zdrojových kódů
+### 1.2 Předem sestavené binární soubory (GitHub Releases)
 
-Nejjednodušší instalace:
-
-```sh
-go install github.com/MichalHerstus/yaga/cmd/yaga@latest
-```
-
-Binární soubor se umístí do `$(go env GOPATH)/bin/yaga` (obvykle `~/go/bin/yaga`); ujistěte se,
-že je tento adresář na vašem `PATH` (nebo nastavte `GOBIN` před instalací). Pro sestavení
-z místní kopie:
-
-```sh
-git clone https://github.com/MichalHerstus/yaga.git
-cd yaga
-go build -o yaga ./cmd/yaga
-```
-
-Ověření instalace:
-
-```sh
-yaga version          # např. yaga version 2.1.5
-# vypíše text s použitím
-```
-
-### 1.3 Předem sestavené binární soubory (GitHub Releases)
-
-Hotové binární soubory pro běžné kombinace OS/arch jsou publikovány na stránce
+Připravené binární soubory pro běžné kombinace OS/arch jsou publikovány na stránce
 [GitHub Releases](https://github.com/MichalHerstus/yaga/releases) projektu. Stáhněte
-build odpovídající vaší platformě (např. `yaga-MacOS`).
+build odpovídající vaší platformě (např. `yaga_2.1.6_darwin_arm64.tar.gz`), rozbalte
+a binární soubor `yaga` umístěte na váš `PATH`:
 
+```sh
+tar xzf yaga_2.1.6_darwin_arm64.tar.gz
+sudo mv yaga /usr/local/bin/
+yaga version
+```
 
-> **Funkční instalace Go je stále povinná — i když používáte předem sestavený binární
-> soubor yaga.** yaga pouze *generuje* admin panel; neobsahuje překladač. Sestavení
-> vygenerovaného dashboardu vždy spouští nástroje Go proti vygenerovanému projektu:
-> `go mod tidy`, `go tool templ generate` a `go build ./...`. Pokud nemůžete nainstalovat Go
-> na cílový stroj, použijte `yaga generate` na stroji s Go a přeneste **binární soubor**
-> (ne zdrojové kódy) na cíl — `make package` sestaví přesně takový
-> instalační archiv.
+> **Go je potřeba jen tam, kde sestavujete vygenerovaný dashboard.** YAGA pouze *generuje* admin panel; neobsahuje překladač. Sestavení vygenerovaného dashboardu vždy spouští nástroje Go proti vygenerovanému projektu: `go mod tidy`, `go tool templ generate` a `go build ./...`. Pokud cílový stroj nemůže běžet Go, sestavte na stroji s Go a přeneste **binární soubor** (ne zdrojové kódy) na cíl — `make package` sestaví přesně takový instalační archiv.
 
-### 1.4 Konfigurace DSN (jak dashboard najde své databáze)
+### 1.3 Konfigurace DSN (jak dashboard najde své databáze)
 
 Vygenerovaný dashboard otevírá **dvě** databáze: obchodní databázi (`DATABASE_URL`) a
 lokální SQLite **systémovou databázi** obsahující pouze autentizační data (`AUTH_DB_DSN`,
@@ -627,9 +604,42 @@ yaga wedit --port 9091 --open    # vlastní port / otevřít prohlížeč
 Lokální HTTP server s vestavěnou single-page aplikací:
 
 - Panelové editory pro panel, connections, auth, navigaci, resources, stránky;
+- obrazovka **Schema** zobrazující tabulky zachyceného bloku `schema:`, s **View** (sloupce +
+  cizí klíče) a **Show data** (prvních N řádků) — data pocházejí z živé databáze
+  nakonfigurované pod `connections:` (nebo `--db`), v opačném případě fallback na paměťovou
+  stub databázi, není-li nakonfigurováno žádné připojení;
+- každý editor dataviewu má záložku **Show data**, která zobrazuje řádky z tabulky daného
+  dataviewu (`table:` přepínač, jinak `<name>s`), s konfigurovatelným limitem řádků
+  (předvyplněno z `per_page` seznamu);
+- v záložkách List/Form jsou buňky **Název** sloupců a polí rozbalovací: nabízejí sloupce
+  tabulky dataviewu z zachyceného bloku `schema:` (List navíc nabízí odvozené názvy
+  `<fk>_label`), stále ale přijímají volný text pro aliasy;
+- v záložce Settings je `Table` pouze pro čtení (nastaveno během `yaga init --db`) a `ID column`
+  je rozbalovací nabídka nabízející pouze primární klíčové sloupce z bloku schématu; `ID type`
+  se nezobrazuje;
+- otevření surového YAML, když je dataview otevřený, posune textarea YAML přímo k záznamu
+  `- name:` daného dataviewu pod `resources:`.
 - obrazovka **Validate** spouštějící plný validátor (+ auto-fix) živě;
 - záložka **Preview** renderující mock dashboard a pohledy seznamů per-resource (mocky
   stránek/zdrojů, světlý/tmavý režim);
+- **Preview — přepínač živých dat:** ve výchozím nastavení preview ukazuje deterministická
+  falešná data. Přepnutím **Live data** ON se ptají na skutečnou databázi (stejný DSN, který
+  by použil vygenerovaná aplikace). Když jsou živá data zapnutá:
+  - pohledy seznamu/karet/detailu/formuláře ukazují skutečné řádky místo falešných;
+  - pohledy detail/update otevírají první řádek tabulky, není-li zadán `id`;
+  - přepnutí zdroje/stránky resetuje živá data na OFF (falešná data ve výchozím — volí se
+    opnieuw pro každý cíl).
+  Pokud je tabulka prázdná nebo není nakonfigurována DB, zobrazí se banner místo tichého
+  falšování dat.
+- **Preview — testovací spuštění akce:** z libovolného pohledu zdroje má každá akce
+  tlačítko "Test run". Kliknutím se otevře modální okno, kde můžete spustit akci proti
+  živé databázi. Mutační akce (INSERT/UPDATE/DELETE) ve výchozím nastavení běží v režimu
+  dry-run — ověří syntaxi SQL/Lua bez zápisu; odškrtnutím dry-run provedou zápis. SELECT
+  akce vracejí řádky; mutační akce hlásí ovlivněné řádky; Lua akce vypíší výstup. Chyby se
+  zobrazí inline.
+- **Preview — "Open in new tab":** vykreslené preview lze otevřít v samostatné kartě
+  prohlížeče (má vlastní přepínač Live), což je užitečné pro sdílení pohledu s živými daty
+  bez nutnosti nechat otevřený wedit.
 - záložka surového YAML;
 - úpravy se drží **v paměti** — explicitní **Save** zapíše na disk (nástroj MCP `save`
   nejprve vytvoří zálohu `<config>.bak`);

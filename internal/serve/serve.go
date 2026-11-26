@@ -188,6 +188,7 @@ func (s *Server) routes() {
 	mux.HandleFunc("POST /api/lua-check", s.handleLuaCheck)
 	mux.HandleFunc("POST /api/lua-run", s.handleLuaRun)
 	mux.HandleFunc("POST /api/sql-run", s.handleSQLRun)
+	mux.HandleFunc("POST /api/preview/action-run", s.handlePreviewActionRun)
 	mux.HandleFunc("POST /api/sample-refresh", s.handleSampleRefresh)
 
 	mux.HandleFunc("GET /api/schema-browser", s.handleSchemaBrowser)

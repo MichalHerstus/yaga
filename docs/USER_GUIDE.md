@@ -15,64 +15,43 @@ database design.
 
 ## 1. Installation
 
-### 1.1 Prerequisites — a working Go toolchain
+### 1.1 Prerequisites
+
+yaga ships as a single ready-to-run binary for your OS — no Go toolchain is needed to
+**run** yaga itself. You only need Go (1.26+) on the machine that **builds the generated
+dashboard** (`go mod tidy`, `go tool templ generate`, `go build`), e.g. your development
+machine or a CI runner. The generated dashboard can then be deployed as a standalone
+binary to any machine.
 
 | Tool | Required for | Notes |
 |---|---|---|
-| [Go](https://go.dev/dl/) 1.26+ | Running yaga **and** building the generated dashboard | Non-negotiable; see 1.4 |
-| [Templ](https://templ.dev/) | Compiling `.templ` views in the generated app | Optional to install manually — the generated `go.mod` declares `tool github.com/a-h/templ/cmd/templ`, so `go tool templ generate` works through the Go toolchain |
+| [Go](https://go.dev/dl/) 1.26+ | Building the **generated** dashboard | Only needed where you run `make build` / `go build ./...`; yaga itself is already compiled |
 
-No Node.js/npm, no sqlc, and no Tailwind binary are needed. The Tailwind stylesheet is
-pre-built and vendored into the generated project, and Chart.js is embedded into the yaga
-binary — the running dashboard needs **no internet at runtime**.
+No Node.js/npm, no sqlc, and no Tailwind binary are needed anywhere. The Tailwind
+stylesheet is pre-built and vendored into the generated project, and Chart.js is embedded
+into the yaga binary — the running dashboard needs **no internet at runtime**.
 
-### 1.2 Install from source
-
-The simplest installation:
-
-```sh
-go install github.com/MichalHerstus/yaga/cmd/yaga@latest
-```
-
-The binary lands in `$(go env GOPATH)/bin/yaga` (commonly `~/go/bin/yaga`); make sure
-that directory is on your `PATH` (or set `GOBIN` before installing). To build from a
-local checkout instead:
-
-```sh
-git clone https://github.com/MichalHerstus/yaga.git
-cd yaga
-go build -o yaga ./cmd/yaga
-```
-
-Verify the installation:
-
-```sh
-yaga version          # e.g. yaga version 2.1.5
-yaga                  # prints the usage text
-```
-
-### 1.3 Pre-built binaries (GitHub Releases)
+### 1.2 Pre-built binaries (GitHub Releases)
 
 Ready-to-run binaries for the common OS/arch combinations are published on the project's
 [GitHub Releases](https://github.com/MichalHerstus/yaga/releases) page. Download the
-archive matching your platform (e.g. `yaga_2.1.5_darwin_arm64.tar.gz`), extract it and
+archive matching your platform (e.g. `yaga_2.1.6_darwin_arm64.tar.gz`), extract it and
 place the `yaga` binary somewhere on your `PATH`:
 
 ```sh
-tar xzf yaga_2.1.5_darwin_arm64.tar.gz
+tar xzf yaga_2.1.6_darwin_arm64.tar.gz
 sudo mv yaga /usr/local/bin/
 yaga version
 ```
 
-> **A working Go installation is still required — even when you use a pre-built yaga
-> binary.** yaga only *generates* the admin panel; it does not ship a compiler. Building
-> the generated dashboard always runs Go tools against the generated project:
-> `go mod tidy`, `go tool templ generate` and `go build ./...`. If you cannot install Go
-> on the machine, use `yaga generate` on a machine that has Go and transfer the built
-> **binary** (not the source) to the target — `make package` builds exactly that
-> deployment archive for you.
+> **Go is only needed where the generated dashboard is built.** yaga only *generates* the
+> admin panel; it does not ship a compiler. Building the generated dashboard runs Go tools
+> against the generated project: `go mod tidy`, `go tool templ generate` and `go build ./...`.
+> If your target machine cannot run Go, build on a machine that has Go and transfer the
+> built **binary** (not the source) — `make package` builds exactly that deployment archive
+> for you.
 
-### 1.4 DSN configuration (how the dashboard finds its databases)
+### 1.3 DSN configuration (how the dashboard finds its databases)
 
 The generated dashboard opens **two** databases: the business database (`DATABASE_URL`)
 and a local SQLite **system database** holding only auth data (`AUTH_DB_DSN`, default
@@ -665,6 +644,23 @@ A local HTTP server with an embedded single-page app:
 - a **Validate** screen running the full validator (+ auto-fix) live;
 - a **Preview** tab rendering a mock dashboard and per-resource list views (page/resource
   mocks, light/dark theme);
+- **Preview — live data toggle:** by default the preview shows deterministic fake data.
+  Switch **Live data** ON to query the real database (the same DSN the generated app would
+  use). When live data is on:
+  - the list/card/detail/form views show real rows instead of fakes;
+  - detail/update views open on the first row of the table when no `id` is given;
+  - switching resource/page resets live data to OFF (fake data by default — opt in again
+    per target).
+  If the table is empty or no DB is configured, a banner says so instead of silently
+  faking data.
+- **Preview — action test-run:** from any resource view each action gets a "Test run"
+  button. Clicking opens a modal where you can run the action against the live database.
+  Mutating actions (INSERT/UPDATE/DELETE) default to dry-run — they validate the SQL/Lua
+  syntax without writing; uncheck dry-run to execute for real. SELECT actions return rows;
+  mutating actions report rows affected; Lua actions print output. Errors are shown inline.
+- **Preview — "Open in new tab":** the rendered preview can be opened in a standalone
+  browser tab (it has its own Live toggle), which is useful for sharing a live-data view
+  without keeping wedit open.
 - a raw-YAML tab;
 - edits are held **in memory** — explicit **Save** writes to disk (the MCP `save` tool
   backs up `<config>.bak` first);

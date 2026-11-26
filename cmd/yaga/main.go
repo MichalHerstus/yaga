@@ -17,7 +17,7 @@ import (
 )
 
 // version is the current yaga release version.
-const version = "2.1.5"
+const version = "2.1.6"
 
 //go:embed AGENTS_for_generated_dashboard.md
 var agentsForGeneratedDashboard string

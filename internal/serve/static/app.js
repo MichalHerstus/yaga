@@ -3478,7 +3478,7 @@ async function pageValidate() {
 
 /* ---------- page: Preview ---------- */
 
-state.preview = { view: "page", target: "", theme: "auto" };
+state.preview = { view: "page", target: "", theme: "auto", liveData: false };
 
 function pagePreview() {
   const c = state.config;
@@ -3505,10 +3505,30 @@ function pagePreview() {
   }
   pickTarget();
 
-  function loadPreview() {
+  function previewURL() {
     const q = new URLSearchParams({ view: state.preview.view, theme: state.preview.theme });
+    if (state.preview.liveData) q.set("live", "1");
     if (state.preview.target) q.set(state.preview.view === "resource" ? "resource" : "page", state.preview.target);
-    iframe.src = "/preview?" + q.toString();
+    // detail/form/card views need resource + id/mode
+    if (state.preview.view === "detail" || state.preview.view === "form" || state.preview.view === "card") {
+      q.set("resource", state.preview.target);
+    }
+    if (state.preview.view === "form") {
+      q.set("mode", state.preview.formMode || "create");
+      if (state.preview.formId) q.set("id", state.preview.formId);
+    }
+    if (state.preview.view === "detail" && state.preview.detailId) q.set("id", state.preview.detailId);
+    return "/preview?" + q.toString();
+  }
+
+  function loadPreview() {
+    // `_t` makes every URL unique so the browser always issues a fresh request
+    // (switching target/live mode must never reuse a cached document).
+    // `embed=1` marks built-in iframe preview so the server disables
+    // click-to-switch in the preview itself (dropdown only).
+    const url = previewURL();
+    const sep = url.indexOf("?") >= 0 ? "&" : "?";
+    iframe.src = url + sep + "_t=" + Date.now() + "&embed=1";
   }
 
   async function syncConfigThenLoad() {
@@ -3528,7 +3548,14 @@ function pagePreview() {
 
   const viewSel = document.createElement("select");
   viewSel.id = "preview-view";
-  for (const [v, l] of [["page", "Page"], ["resource", "Dataview"]]) {
+  const viewOptions = [
+    ["page", "Page"],
+    ["resource", "Dataview (list)"],
+    ["card", "Card view"],
+    ["detail", "Detail view"],
+    ["form", "Form (create/update)"]
+  ];
+  for (const [v, l] of viewOptions) {
     const o = document.createElement("option");
     o.value = v;
     o.textContent = l;
@@ -3567,32 +3594,202 @@ function pagePreview() {
   }
   themeSel.value = state.preview.theme;
 
+  const liveToggle = document.createElement("input");
+  liveToggle.type = "checkbox";
+  liveToggle.id = "preview-live";
+  liveToggle.checked = state.preview.liveData;
+  const liveLabel = document.createElement("label");
+  liveLabel.htmlFor = "preview-live";
+  liveLabel.textContent = "Live data";
+  liveLabel.style.fontSize = "12px";
+  liveLabel.style.color = "var(--text-dim)";
+  liveLabel.style.marginLeft = "6px";
+
+  const openTab = btn("Open in new tab");
+  openTab.title = "Open the preview in a new browser tab";
+  openTab.addEventListener("click", () => {
+    const url = previewURL();
+    window.open(url, "_blank");
+  });
+
   const refresh = btn("Refresh", "primary");
   refresh.addEventListener("click", syncConfigThenLoad);
 
   viewSel.addEventListener("change", () => {
     state.preview.view = viewSel.value;
     state.preview.target = targets()[0] || "";
+    state.preview.formMode = "create";
+    state.preview.formId = "";
+    state.preview.detailId = "";
+    // Switching what is previewed resets live data to OFF: live rows are an
+    // explicit opt-in per target, never carried over from the previous one.
+    state.preview.liveData = false;
+    liveToggle.checked = false;
     fillTargets();
     syncConfigThenLoad();
   });
   targetSel.addEventListener("change", () => {
     state.preview.target = targetSel.value;
+    // Same rule as above: a different resource/page starts with sample data.
+    state.preview.liveData = false;
+    liveToggle.checked = false;
     syncConfigThenLoad();
   });
   themeSel.addEventListener("change", () => {
     state.preview.theme = themeSel.value;
     loadPreview();
   });
+  liveToggle.addEventListener("change", () => {
+    state.preview.liveData = liveToggle.checked;
+    loadPreview();
+  });
 
-  toolbar.append(viewSel, targetSel, themeSel);
+  toolbar.append(viewSel, targetSel, themeSel, liveToggle, liveLabel);
   const spacer = document.createElement("div");
   spacer.className = "spacer";
   toolbar.appendChild(spacer);
+  toolbar.appendChild(openTab);
   toolbar.appendChild(refresh);
 
   root.append(toolbar, errDiv, iframe);
   syncConfigThenLoad();
+}
+
+/* ---------- Preview: action test-run ---------- */
+
+async function testRunAction(resource, actionName, id) {
+  const c = state.config;
+  const res = (c.resources || []).find((r) => r.name === resource);
+  if (!res) { toast("Resource not found: " + resource); return; }
+  const action = (res.actions || []).find((a) => a.name === actionName);
+  if (!action) { toast("Action not found: " + actionName); return; }
+
+  const isMutating = action.query && !/^\s*SELECT/i.test(action.query) || action.proc || action.script;
+
+  openModal("Test run: " + action.label || action.name, (body, ok, cancel, close) => {
+    const info = document.createElement("div");
+    info.style.fontSize = "13px";
+    info.style.color = "var(--text-dim)";
+    info.style.marginBottom = "10px";
+    info.textContent = isMutating
+      ? "This action modifies data. Enable dry-run to validate without executing."
+      : "This action returns data (SELECT).";
+    body.appendChild(info);
+
+    const dryRunLabel = document.createElement("label");
+    dryRunLabel.style.display = "block";
+    dryRunLabel.style.marginBottom = "6px";
+    const dryRunInput = document.createElement("input");
+    dryRunInput.type = "checkbox";
+    dryRunInput.checked = true;
+    dryRunInput.style.marginRight = "6px";
+    dryRunLabel.appendChild(dryRunInput);
+    dryRunLabel.appendChild(document.createTextNode("Dry-run (validate only, no writes)"));
+    body.appendChild(dryRunLabel);
+
+    if (isMutating) {
+      const warn = document.createElement("div");
+      warn.style.color = "var(--red)";
+      warn.style.fontSize = "12px";
+      warn.style.marginTop = "6px";
+      warn.textContent = "⚠ Dry-run is recommended for mutating actions.";
+      body.appendChild(warn);
+    }
+
+    ok.textContent = "Run";
+    ok.addEventListener("click", async () => {
+      ok.disabled = true;
+      ok.textContent = "Running…";
+      try {
+        const r = await api("POST", "/api/preview/action-run", {
+          resource: resource,
+          action_name: actionName,
+          id: id || 0,
+          dry_run: dryRunInput.checked
+        });
+        close();
+        showActionResult(action.name || actionLabel, r);
+      } catch (e) {
+        close();
+        const msg = e.data ? (e.data.error || e.data.errors?.join("\n") || e.message) : e.message;
+        showActionResult(action.name || actionLabel, { ok: false, error: msg });
+      } finally {
+        ok.disabled = false;
+        ok.textContent = "Run";
+      }
+    });
+    cancel.textContent = "Cancel";
+  });
+}
+
+function actionLabel(a) {
+  return a.label || a.name;
+}
+
+function showActionResult(actionName, result) {
+  openModal("Action result: " + actionName, (body, ok, cancel, close) => {
+    ok.textContent = "Close";
+    ok.addEventListener("click", () => close());
+    cancel.classList.add("hidden");
+
+    const pre = document.createElement("pre");
+    pre.style.fontSize = "12px";
+    pre.style.overflow = "auto";
+    pre.style.maxHeight = "300px";
+    pre.style.background = "var(--bg)";
+    pre.style.border = "1px solid var(--border)";
+    pre.style.borderRadius = "6px";
+    pre.style.padding = "10px";
+    pre.style.whiteSpace = "pre-wrap";
+    pre.style.wordBreak = "break-all";
+    pre.textContent = JSON.stringify(result, null, 2);
+    body.appendChild(pre);
+
+    if (result.ok) {
+      const badge = document.createElement("span");
+      badge.style.display = "inline-block";
+      badge.style.marginBottom = "8px";
+      badge.style.padding = "2px 8px";
+      badge.style.borderRadius = "4px";
+      badge.style.fontSize = "12px";
+      badge.style.fontWeight = "600";
+      if (result.dryRun) {
+        badge.textContent = "DRY-RUN — validated, not executed";
+        badge.style.background = "color-mix(in srgb, var(--amber) 15%, transparent)";
+        badge.style.color = "var(--amber)";
+        badge.style.border = "1px solid color-mix(in srgb, var(--amber) 40%, transparent)";
+      } else if (result.rowsAffected !== undefined) {
+        badge.textContent = "Rows affected: " + result.rowsAffected;
+        badge.style.background = "color-mix(in srgb, var(--green) 15%, transparent)";
+        badge.style.color = "var(--green)";
+        badge.style.border = "1px solid color-mix(in srgb, var(--green) 40%, transparent)";
+      } else if (result.rowCount !== undefined) {
+        badge.textContent = "Rows returned: " + result.rowCount;
+        badge.style.background = "color-mix(in srgb, var(--green) 15%, transparent)";
+        badge.style.color = "var(--green)";
+        badge.style.border = "1px solid color-mix(in srgb, var(--green) 40%, transparent)";
+      } else {
+        badge.textContent = "OK";
+        badge.style.background = "color-mix(in srgb, var(--green) 15%, transparent)";
+        badge.style.color = "var(--green)";
+        badge.style.border = "1px solid color-mix(in srgb, var(--green) 40%, transparent)";
+      }
+      body.insertBefore(badge, body.firstChild);
+    } else {
+      const badge = document.createElement("span");
+      badge.style.display = "inline-block";
+      badge.style.marginBottom = "8px";
+      badge.style.padding = "2px 8px";
+      badge.style.borderRadius = "4px";
+      badge.style.fontSize = "12px";
+      badge.style.fontWeight = "600";
+      badge.textContent = "ERROR: " + (result.error || "unknown");
+      badge.style.background = "color-mix(in srgb, var(--red) 15%, transparent)";
+      badge.style.color = "var(--red)";
+      badge.style.border = "1px solid color-mix(in srgb, var(--red) 40%, transparent)";
+      body.insertBefore(badge, body.firstChild);
+    }
+  });
 }
 
 /* ---------- page: Raw YAML ---------- */

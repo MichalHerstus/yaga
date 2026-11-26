@@ -435,6 +435,170 @@ func (s *Server) handleSQLRun(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// handlePreviewActionRun test-runs a resource action (SQL, proc or Lua script)
+// against the live database. When dryRun is true, mutating statements are only
+// validated (prepared / syntax-checked) without being executed. SELECT queries
+// always return rows.
+func (s *Server) handlePreviewActionRun(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Resource   string `json:"resource"`
+		ActionName string `json:"action_name"`
+		ID         int64  `json:"id"`
+		DryRun     bool   `json:"dry_run"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if req.Resource == "" || req.ActionName == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "resource and action_name required"})
+		return
+	}
+
+	s.mu.RLock()
+	cfg := s.cfg
+	s.mu.RUnlock()
+
+	var res *types.Resource
+	for i := range cfg.Resources {
+		if cfg.Resources[i].Name == req.Resource {
+			res = &cfg.Resources[i]
+			break
+		}
+	}
+	if res == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "resource not found: " + req.Resource})
+		return
+	}
+
+	var action *types.Action
+	for i := range res.Actions {
+		if res.Actions[i].Name == req.ActionName {
+			action = &res.Actions[i]
+			break
+		}
+	}
+	if action == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "action not found: " + req.ActionName})
+		return
+	}
+
+	dsn, driver := s.liveConnection()
+	if dsn == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "no live database configured"})
+		return
+	}
+
+	// --- SQL action ---
+	if action.Query != "" {
+		if req.DryRun {
+			if err := queryLiveDryRun(driver, dsn, action.Query); err != nil {
+				writeJSON(w, http.StatusOK, map[string]interface{}{"ok": false, "dryRun": true, "error": err.Error()})
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]interface{}{"ok": true, "dryRun": true, "message": "SQL statement is valid"})
+			return
+		}
+		result, err := queryLiveExec(driver, dsn, action.Query, req.ID)
+		if err != nil {
+			writeJSON(w, http.StatusOK, map[string]interface{}{"ok": false, "error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"ok":           true,
+			"rows":         result.Rows,
+			"rowCount":     len(result.Rows),
+			"rowsAffected": result.RowsAffected,
+			"lastInsertID": result.LastInsertID,
+		})
+		return
+	}
+
+	// --- Proc action ---
+	if action.Proc != "" {
+		if req.DryRun {
+			writeJSON(w, http.StatusOK, map[string]interface{}{"ok": true, "dryRun": true, "message": "procedure " + action.Proc + " is declared"})
+			return
+		}
+		// Resolve the procedure body from the config procedures block.
+		body := ""
+		for _, p := range cfg.Procedures {
+			if p.Name == action.Proc {
+				body = p.SQL
+				break
+			}
+		}
+		if body == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "procedure not declared: " + action.Proc})
+			return
+		}
+		// Run each statement in the body against the live DB. Simple sequential
+		// execution (not a full transaction) — preview-only.
+		if strings.HasPrefix(strings.TrimSpace(strings.ToUpper(body)), "SELECT") {
+			rows, err := queryLive(driver, dsn, body)
+			if err != nil {
+				writeJSON(w, http.StatusOK, map[string]interface{}{"ok": false, "error": err.Error()})
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]interface{}{"ok": true, "rows": rows, "rowCount": len(rows)})
+			return
+		}
+		result, err := queryLiveExec(driver, dsn, body, req.ID)
+		if err != nil {
+			writeJSON(w, http.StatusOK, map[string]interface{}{"ok": false, "error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]interface{}{
+			"ok":           true,
+			"rowsAffected": result.RowsAffected,
+			"lastInsertID": result.LastInsertID,
+		})
+		return
+	}
+
+	// --- Script (Lua) action ---
+	if action.Script != "" {
+		if req.DryRun {
+			errs := luasrc.SyntaxCheck(action.Script)
+			if len(errs) > 0 {
+				var msgs []string
+				for _, e := range errs {
+					msgs = append(msgs, e.Message)
+				}
+				writeJSON(w, http.StatusOK, map[string]interface{}{"ok": false, "dryRun": true, "errors": msgs})
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]interface{}{"ok": true, "dryRun": true, "message": "Lua script is syntactically valid"})
+			return
+		}
+		db, err := sql.Open(driver, dsn)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]interface{}{"ok": false, "error": err.Error()})
+			return
+		}
+		defer db.Close()
+		scope := luasrc.Scope{
+			ID:     req.ID,
+			Table:  res.Table,
+			Action: req.ActionName,
+			Values: map[string]interface{}{},
+		}
+		var out strings.Builder
+		runErr := luasrc.RunWithOutput(context.Background(), db, scope, action.Script, &out)
+		result := map[string]interface{}{
+			"ok":     runErr == nil,
+			"output": out.String(),
+		}
+		if runErr != nil {
+			result["error"] = runErr.Error()
+		}
+		writeJSON(w, http.StatusOK, result)
+		return
+	}
+
+	writeJSON(w, http.StatusBadRequest, map[string]string{"error": "action has no query, proc or script body"})
+}
+
 // handleSchemaBrowser returns every table from the captured schema: block with
 // its columns and foreign keys. Read-only — no DB connection required.
 func (s *Server) handleSchemaBrowser(w http.ResponseWriter, r *http.Request) {
